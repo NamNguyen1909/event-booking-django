@@ -1,0 +1,67 @@
+{% extends 'admin/base_site.html' %}
+{% block content %}
+<h1>{{ title }}</h1>
+
+<div class="stats-summary">
+    <h2>Summary</h2>
+    <p>Total Tickets Sold: {{ total_tickets }}</p>
+    <p>Total Revenue: {{ total_revenue|floatformat:2 }} VND</p>
+</div>
+
+<div style="display: flex; gap: 20px;">
+  {% if events %}
+      <div style="width:50%">
+          <h3>Top Events by Ticket Sales</h3>
+          <canvas id="salesChart"></canvas>
+      </div>
+      <div style="width:50%">
+          <h3>Top Events by Revenue</h3>
+          <canvas id="revenueChart"></canvas>
+      </div>
+  {% else %}
+      <p>Không có dữ liệu để hiển thị.</p>
+  {% endif %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Prepare data for charts
+        const eventNames = [{% for e in events %}'{{ e.title }}',{% endfor %}];
+        const ticketsData = [{% for e in events %}{{ e.tickets_sold }},{% endfor %}];
+        const revenueData = [{% for e in events %}{{ e.total_revenue|default:0 }},{% endfor %}];
+
+        // Ticket sales chart
+        new Chart(
+            document.getElementById('salesChart'),
+            {
+                type: 'bar',
+                data: {
+                    labels: eventNames,
+                    datasets: [{
+                        label: 'Tickets Sold',
+                        data: ticketsData,
+                        backgroundColor: 'rgba(54, 162, 235, 0.5)'
+                    }]
+                }
+            }
+        );
+
+        // Revenue chart
+        new Chart(
+            document.getElementById('revenueChart'),
+            {
+                type: 'bar',
+                data: {
+                    labels: eventNames,
+                    datasets: [{
+                        label: 'Revenue (VND)',
+                        data: revenueData,
+                        backgroundColor: 'rgba(75, 192, 192, 0.5)'
+                    }]
+                }
+            }
+        );
+    });
+</script>
+{% endblock %}
