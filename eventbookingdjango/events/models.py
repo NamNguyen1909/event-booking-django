@@ -38,8 +38,8 @@ class User(AbstractBaseUser, PermissionsMixin):
         ('attendee', 'Attendee'),
     )
 
-    username = models.CharField(max_length=150, unique=True, blank=True, null=True)
-    email = models.EmailField(unique=True, blank=True, null=True)
+    username = models.CharField(max_length=150, unique=True)
+    email = models.EmailField(unique=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='attendee')
     phone = models.CharField(max_length=20, blank=True, null=True)
     avatar = CloudinaryField('avatar', null=True, blank=True)
@@ -73,9 +73,9 @@ class User(AbstractBaseUser, PermissionsMixin):
         now = timezone.now()
         if (now - self.created_at) <= timedelta(days=7):
             return CustomerGroup.NEW
-        if self.total_spent < 500_000:
+        if self.total_spent < 500000:
             return CustomerGroup.REGULAR
-        if 500_000 <= self.total_spent <= 2000000:
+        if 500000 <= self.total_spent <= 2000000:
             return CustomerGroup.VIP
         if self.total_spent > 2000000:
             return CustomerGroup.SUPER_VIP
@@ -119,6 +119,9 @@ class Event(models.Model):
 
     poster = CloudinaryField('poster', null=True, blank=True)  # Hình ảnh sự kiện
 
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
     def __str__(self):
         return self.title
     
@@ -144,33 +147,57 @@ class Ticket(models.Model):
     qr_code = models.CharField(max_length=255, unique=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
-    purchase_date = models.DateTimeField(auto_now_add=True)
+    is_paid = models.BooleanField(default=False)  # Trạng thái thanh toán
+    purchase_date = models.DateTimeField(null=True, blank=True)  # Ngày mua vé
 
     is_checked_in = models.BooleanField(default=False)
     check_in_date = models.DateTimeField(null=True, blank=True)
-    is_active = models.BooleanField(default=True)
 
     def __str__(self):
         return f"Ticket of {self.user} for {self.event.title}"
+
+    def mark_as_paid(self, paid_at):
+        """Đánh dấu vé là đã thanh toán."""
+        self.is_paid = True
+        self.purchase_date = paid_at
+        self.save()
     
     #hàm kiểm tra sau khi check in thì cho is_active = False luôn => Vé vô hiệu lực không thể check in nữa
     def check_in(self):
         if not self.is_checked_in:
             self.is_checked_in = True
             self.check_in_date = timezone.now()
-            self.is_active = False 
 
+
+ 
 class Payment(models.Model):
     PAYMENT_METHOD_CHOICES = (
         ('momo', 'MoMo'),
         ('vnpay', 'VNPay'),
     )
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE)
-    amount = models.DecimalField(max_digits=10, decimal_places=2,validators=[MinValueValidator(0)])
-    # Chọn 1 cái trong PAYMENT_METHOD_CHOICES
-    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)
-    paid_at = models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)  # Người dùng thực hiện thanh toán
+    amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)])  # Tổng tiền
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)  # Phương thức thanh toán
+    paid_at = models.DateTimeField(auto_now_add=True)  # Thời gian thanh toán
+    transaction_id = models.CharField(max_length=255, unique=True)  # ID giao dịch từ cổng thanh toán
+
+    def calculate_amount(self):
+        """Tính tổng tiền dựa trên các vé chưa thanh toán của người dùng."""
+        tickets = Ticket.objects.filter(user=self.user, is_paid=False)  # Lấy các vé chưa thanh toán
+        total = sum(ticket.event.ticket_price for ticket in tickets)
+        return total
+
+    def save(self, *args, **kwargs):
+        """Ghi đè phương thức save để tự động tính tổng tiền và cập nhật vé."""
+        if not self.amount:  # Nếu chưa có giá trị cho amount
+            self.amount = self.calculate_amount()
+
+        super().save(*args, **kwargs)  # Lưu Payment trước để có `paid_at`
+
+        # Cập nhật trạng thái các vé liên quan
+        tickets = Ticket.objects.filter(user=self.user, is_paid=False)
+        for ticket in tickets:
+            ticket.mark_as_paid(self.paid_at)  # Đánh dấu vé là đã thanh toán
 
 class CustomerGroup(models.TextChoices):
     NEW = 'new', 'Khách hàng mới'
@@ -207,14 +234,11 @@ class Notification(models.Model):
     NOTIFICATION_TYPES = (
         ('reminder', 'Reminder'),
         ('update', 'Event Update'),
-        ('general', 'General Notification'),
     )
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
     event = models.ForeignKey(Event, on_delete=models.CASCADE, null=True, blank=True)
     message = models.TextField()
     notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES, default='general')
     is_read = models.BooleanField(default=False)
-    is_email_sent = models.BooleanField(default=False)  # Theo dõi trạng thái gửi email
     created_at = models.DateTimeField(auto_now_add=True)
     # Chưa có cơ chế gửi email tự động (cần tích hợp với một dịch vụ gửi email như SendGrid hoặc Mailgun).
     # Chưa có cơ chế gửi thông báo đẩy (cần tích hợp với Firebase Cloud Messaging hoặc một dịch vụ tương tự).
