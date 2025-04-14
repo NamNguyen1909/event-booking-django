@@ -15,12 +15,6 @@ class MyEventAdmin(admin.ModelAdmin):
         return ", ".join([tag.name for tag in obj.tags.all()])
     Tag_list.short_description = 'Tags'
 
-    def image_view(self, obj):
-        if obj.poster:
-            return mark_safe(f"<img src='{obj.poster.url}' width='100' height='100' />")
-        return "No Image"
-    image_view.short_description = 'Poster'
-
     readonly_fields = ('poster_preview',)
 
     def poster_preview(self, obj):
@@ -28,6 +22,17 @@ class MyEventAdmin(admin.ModelAdmin):
             return mark_safe(f"<img src='{obj.poster.url}' width='300' height='300' />")
         return "No Image"
     poster_preview.short_description = 'Poster Preview'
+
+class MyUserAdmin(admin.ModelAdmin):
+    list_display = ('id', 'username', 'email', 'phone', 'avatar', 'role')
+    list_filter = ('role',)
+    search_fields = ('username', 'email', 'phone')
+
+    readonly_fields = ('avatar_preview',)
+    def avatar_preview(self, obj):
+        if obj.avatar:
+            return mark_safe(f"<img src='{obj.avatar.url}' width='300' height='300' />")
+        return "No Image"
 
 # Statistics and reporting: Admins and organizers can view reports on ticket sales,
 # revenue, and interest levels through visual charts.
@@ -62,7 +67,7 @@ class MyAdminSite(admin.AdminSite):
 admin_site = MyAdminSite(name='EventsAdmin')
 
 # Register your models here.
-admin_site.register(User)
+admin_site.register(User, MyUserAdmin)
 admin_site.register(Event, MyEventAdmin)
 admin_site.register(Ticket)
 admin_site.register(Payment)

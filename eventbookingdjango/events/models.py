@@ -1,13 +1,11 @@
 from django.db import models
 
 # Create your models here.
-from django.db import models
 from django.contrib.auth.models import AbstractUser
 from cloudinary.models import CloudinaryField
 
 
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
-from django.db import models
 
 from datetime import timedelta
 from django.utils import timezone
@@ -107,6 +105,7 @@ class Event(models.Model):
     category = models.CharField(max_length=50, choices=CATEGORY_CHOICES)
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
+    is_active = models.BooleanField(default=True)
 
     # Dùng khi kết nối bản đồ Google
     location = models.CharField(max_length=500)
@@ -122,6 +121,16 @@ class Event(models.Model):
 
     def __str__(self):
         return self.title
+    
+    def save(self):
+        if self.start_time >= self.end_time:
+            raise ValueError("Start time must be before end time.")
+    
+    #hàm kiểm tra thời gian sau khi end_time qua thì is_active = False
+    def check_event_status(self):
+        if timezone.now() > self.end_time:
+            self.is_active = False
+            self.save()
 
 class Tag(models.Model):
     name = models.CharField(max_length=50, unique=True)
@@ -134,13 +143,22 @@ class Ticket(models.Model):
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='tickets')
     qr_code = models.CharField(max_length=255, unique=True)
 
-    is_checked_in = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
-    check_in_date = models.DateTimeField(null=True, blank=True)
     purchase_date = models.DateTimeField(auto_now_add=True)
+
+    is_checked_in = models.BooleanField(default=False)
+    check_in_date = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
 
     def __str__(self):
         return f"Ticket of {self.user} for {self.event.title}"
+    
+    #hàm kiểm tra sau khi check in thì cho is_active = False luôn => Vé vô hiệu lực không thể check in nữa
+    def check_in(self):
+        if not self.is_checked_in:
+            self.is_checked_in = True
+            self.check_in_date = timezone.now()
+            self.is_active = False 
 
 class Payment(models.Model):
     PAYMENT_METHOD_CHOICES = (
@@ -178,6 +196,12 @@ class DiscountCode(models.Model):
 
     def __str__(self):
         return self.code
+    #hàm kiểm tra mã giảm giá có còn hiệu lực không
+    def is_valid(self): 
+        now = timezone.now()
+        if self.valid_from <= now <= self.valid_to and self.used_count < self.max_uses:
+            return True
+        return False
 
 class Notification(models.Model):
     NOTIFICATION_TYPES = (
