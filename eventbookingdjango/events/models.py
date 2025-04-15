@@ -125,9 +125,10 @@ class Event(models.Model):
     def __str__(self):
         return self.title
     
-    def save(self):
+    def save(self, *args, **kwargs):
         if self.start_time >= self.end_time:
             raise ValueError("Start time must be before end time.")
+        super().save(*args, **kwargs)  # Gọi phương thức save của lớp cha để xử lý các tham số
     
     #hàm kiểm tra thời gian sau khi end_time qua thì is_active = False
     def check_event_status(self):
@@ -223,12 +224,17 @@ class DiscountCode(models.Model):
 
     def __str__(self):
         return self.code
-    #hàm kiểm tra mã giảm giá có còn hiệu lực không
-    def is_valid(self): 
+    
+    def is_valid(self):
+        """Kiểm tra trạng thái hợp lệ của mã giảm giá."""
         now = timezone.now()
-        if self.valid_from <= now <= self.valid_to and self.used_count < self.max_uses:
-            return True
-        return False
+        if not self.is_active:
+            return False
+        if self.valid_from and self.valid_to and not (self.valid_from <= now <= self.valid_to):
+            return False
+        if self.max_uses is not None and self.used_count >= self.max_uses:
+            return False
+        return True
 
 class Notification(models.Model):
     NOTIFICATION_TYPES = (
@@ -248,7 +254,6 @@ class Review(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     rating = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])  # Giới hạn từ 1 đến 5
     comment = models.TextField(blank=True)
-    is_approved = models.BooleanField(default=False)  # Trạng thái phê duyệt
     created_at = models.DateTimeField(auto_now_add=True)
 
 class ChatMessage(models.Model):
