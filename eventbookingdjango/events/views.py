@@ -1,4 +1,4 @@
-from rest_framework import viewsets, generics, permissions, status
+from rest_framework import viewsets, generics, permissions, status,parsers
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.decorators import action
@@ -10,13 +10,17 @@ from events.serializers import (
     ReviewSerializer, ChatMessageSerializer, EventStatisticSerializer,EventTrendingLogSerializer
 )
 from events.paginators import ItemPaginator
+from events import perms
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
+
 
 # Đăng ký tài khoản
 #Cho phép người dùng đăng ký tài khoản với vai trò admin, organizer, hoặc attendee
-class UserViewSet(viewsets.ViewSet, generics.CreateAPIView,generics.ListAPIView):
-    queryset = User.objects.all()
+class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
+    queryset = User.objects.filter(is_active=True)
     serializer_class = UserSerializer
     permission_classes = [permissions.AllowAny]  # Cho phép mọi người đăng ký tài khoản
+    parser_classes = [parsers.MultiPartParser, parsers.FormParser,JSONParser]  # Cho phép upload file (avatar)
 
     def get_view_name(self):
         return "Đăng ký tài khoản"
@@ -24,7 +28,7 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView,generics.ListAPIView)
 # Tạo sự kiện (chỉ dành cho organizer)
 #Cho phép organizer tạo, cập nhật, và quản lý sự kiện của mình
 class EventViewSet(viewsets.ModelViewSet):
-    queryset = Event.objects.filter(is_active=True)
+    queryset = Event.objects.prefetch_related('tags').filter(is_active=True)
     serializer_class = EventSerializer
     pagination_class = ItemPaginator
     permission_classes = [permissions.IsAuthenticated]  # Chỉ người dùng đã đăng nhập mới được truy cập
@@ -49,6 +53,21 @@ class EventViewSet(viewsets.ModelViewSet):
         events = self.queryset.filter(category__icontains=category)
         serializer = self.get_serializer(events, many=True)
         return Response(serializer.data)
+    
+    #Hiển thị Review
+    #VD: GET /events/{event_id}/reviews
+    @action(detail=True, methods=['get'], url_path='reviews')
+    def get_reviews(self, request, pk):
+        """Lấy danh sách review cho sự kiện."""
+        # C1
+        # event = self.get_object()
+        # reviews = Review.objects.filter(event=event)
+        # serializer = ReviewSerializer(reviews, many=True)
+        # return Response(serializer.data)
+        # C2
+        reviews=self.get_object().reviews_set().select_related('user').all()
+        return Response(ReviewSerializer(reviews, many=True).data,status=status.HTTP_200_OK)
+
 
 # Gợi ý theo sở thích
 # Hiển thị danh sách các tag để gợi ý sự kiện theo sở thích
@@ -109,10 +128,10 @@ class NotificationViewSet(viewsets.ViewSet, generics.ListAPIView):
 
 # Đánh giá sự kiện
 # Cho phép người dùng đánh giá và viết nhận xét về sự kiện
-class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView):
+class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView,generics.DestroyAPIView):
     queryset = Review.objects.all()
     serializer_class = ReviewSerializer
-    permission_classes = [permissions.IsAuthenticated]  # Chỉ người dùng đã đăng nhập mới được truy cập
+    permission_classes = [perms.ReviewOwner]  # Chỉ người dùng đã đăng nhập mới được truy cập
 
     def get_queryset(self):
         """Trả về danh sách review cho sự kiện."""
@@ -124,13 +143,6 @@ class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Updat
     def perform_create(self, serializer):
         """Gán người dùng hiện tại khi tạo review."""
         serializer.save(user=self.request.user)
-
-    def perform_update(self, serializer):
-        """Chỉ cho phép người dùng sửa review của chính mình."""
-        review = self.get_object()
-        if review.user != self.request.user:
-            raise permissions.PermissionDenied("Bạn không có quyền sửa review này.")
-        serializer.save()
 
     def get_view_name(self):
         return "Đánh giá sự kiện"

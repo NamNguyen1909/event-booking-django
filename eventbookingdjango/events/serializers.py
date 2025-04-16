@@ -3,11 +3,18 @@ from rest_framework.serializers import ModelSerializer #Trong môn Các công ng
 from django.db import models  # Import models để sử dụng các hàm aggregate như Sum
 from events.models import Event, User, Tag, Ticket, Payment, DiscountCode,Notification,Review,ChatMessage,EventTrendingLog
 
+
+class TagSerializer(ModelSerializer):
+    class Meta:
+        model = Tag
+        fields = ['id', 'name']
+
+
 # Tạo sự kiện (Organizer tạo sự kiện)
 class EventSerializer(ModelSerializer):
     organizer = serializers.ReadOnlyField(source='organizer.id')  # Hiển thị ID của organizer
     organizer_name = serializers.ReadOnlyField(source='organizer.username')  # Hiển thị tên của organizer
-    tags = serializers.StringRelatedField(many=True)  # Hiển thị tên các tag
+    tags = TagSerializer(many=True)  # Hiển thị tên các tag
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -25,8 +32,9 @@ class EventSerializer(ModelSerializer):
 
 # Đăng ký tài khoản (Admin, Organizer, Attendee)
 class UserSerializer(serializers.ModelSerializer):
-    tags = serializers.StringRelatedField(many=True)  # Hiển thị tên các tag
-
+    # tags = TagSerializer(many=True)  # Hiển thị tên các tag
+    tags = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(), many=True)  # Hỗ trợ gửi danh sách ID
+    
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data['avatar'] = instance.avatar.url if instance.avatar else ''
@@ -34,28 +42,31 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = [
-            'id', 'username', 'email', 'role', 'phone', 'avatar', 'total_spent',
-            'tags', 'is_active', 'is_staff', 'created_at', 'updated_at'
-        ]
-        read_only_fields = ['id', 'total_spent', 'is_active', 'is_staff', 'created_at', 'updated_at']
-
-    def get_avatar_url(self, obj):
-        """Trả về URL của ảnh đại diện nếu có."""
-        return obj.avatar.url if obj.avatar else None
+        fields = ['username','password', 'email', 'role', 'phone', 'avatar','tags']
+        extra_kwargs = {
+            'password': 
+                {'write_only': True},  # Không cho phép đọc password
+            }
     
     def create(self, validated_data):
+        tags = validated_data.pop('tags', [])  # Lấy danh sách tag từ dữ liệu
         password = validated_data.pop('password')
         user = User(**validated_data)
         user.set_password(password)
         user.save()
+        user.tags.set(tags)  # Gán các tag cho user
         return user
 
-#Gợi ý theo sở thích
-class TagSerializer(ModelSerializer):
-    class Meta:
-        model = Tag
-        fields = ['id', 'name']
+    # # Của thầy
+    # def create(self, validated_data):
+    #     data = validated_data.copy()
+    #     u = User(**data)
+    #     u.set_password(u.password)
+    #     u.save()
+    #     return u
+
+
+
 
 # Đặt vé trực tuyến
 class TicketSerializer(serializers.ModelSerializer):
