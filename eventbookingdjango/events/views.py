@@ -65,7 +65,7 @@ class EventViewSet(viewsets.ModelViewSet):
         # serializer = ReviewSerializer(reviews, many=True)
         # return Response(serializer.data)
         # C2
-        reviews=self.get_object().reviews_set().select_related('user').all()
+        reviews=self.get_object().reviews_set.select_related('user').all()
         return Response(ReviewSerializer(reviews, many=True).data,status=status.HTTP_200_OK)
 
 
