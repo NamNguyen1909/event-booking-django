@@ -165,6 +165,7 @@ class ReviewSerializer(serializers.ModelSerializer):
             'avatar': obj.user.avatar.url if obj.user.avatar else None,
         }
     
+    
 #Chat real-time
 class ChatMessageSerializer(ModelSerializer):
     user_info = serializers.SerializerMethodField()
