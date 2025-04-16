@@ -5,7 +5,8 @@ from events.models import Event, User, Tag, Ticket, Payment, DiscountCode,Notifi
 
 # Tạo sự kiện (Organizer tạo sự kiện)
 class EventSerializer(ModelSerializer):
-    organizer = serializers.ReadOnlyField(source='organizer.id')
+    organizer = serializers.ReadOnlyField(source='organizer.id')  # Hiển thị ID của organizer
+    organizer_name = serializers.ReadOnlyField(source='organizer.username')  # Hiển thị tên của organizer
     tags = serializers.StringRelatedField(many=True)  # Hiển thị tên các tag
 
     def to_representation(self, instance):
@@ -18,19 +19,23 @@ class EventSerializer(ModelSerializer):
         fields = [
             'id', 'organizer', 'organizer_name', 'title', 'description', 'category',
             'start_time', 'end_time', 'is_active', 'location', 'latitude', 'longitude',
-            'total_tickets', 'ticket_price', 'tags', 'poster_url', 'created_at', 'updated_at'
+            'total_tickets', 'ticket_price', 'tags', 'poster', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'organizer', 'organizer_name', 'created_at', 'updated_at']
 
 # Đăng ký tài khoản (Admin, Organizer, Attendee)
 class UserSerializer(serializers.ModelSerializer):
     tags = serializers.StringRelatedField(many=True)  # Hiển thị tên các tag
-    avatar_url = serializers.SerializerMethodField()  # URL của ảnh đại diện
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['avatar'] = instance.avatar.url if instance.avatar else ''
+        return data
 
     class Meta:
         model = User
         fields = [
-            'id', 'username', 'email', 'role', 'phone', 'avatar_url', 'total_spent',
+            'id', 'username', 'email', 'role', 'phone', 'avatar', 'total_spent',
             'tags', 'is_active', 'is_staff', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'total_spent', 'is_active', 'is_staff', 'created_at', 'updated_at']

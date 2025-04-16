@@ -15,24 +15,25 @@ class MyEventAdmin(admin.ModelAdmin):
         return ", ".join([tag.name for tag in obj.tags.all()])
     Tag_list.short_description = 'Tags'
 
-    readonly_fields = ('poster_preview',)
+    readonly_fields = ('poster_view',)
 
-    def poster_preview(self, obj):
+    def poster_view(self, obj):
         if obj.poster:
             return mark_safe(f"<img src='{obj.poster.url}' width='300' height='300' />")
         return "No Image"
-    poster_preview.short_description = 'Poster Preview'
+    poster_view.short_description = 'Poster'
 
 class MyUserAdmin(admin.ModelAdmin):
     list_display = ('id', 'username', 'email', 'phone', 'avatar', 'role')
     list_filter = ('role',)
     search_fields = ('username', 'email', 'phone')
 
-    readonly_fields = ('avatar_preview',)
-    def avatar_preview(self, obj):
+    readonly_fields = ('avatar_view',)
+    def avatar_view(self, obj):
         if obj.avatar:
             return mark_safe(f"<img src='{obj.avatar.url}' width='300' height='300' />")
         return "No Image"
+    avatar_view.short_description = 'Avatar'
 
 # Statistics and reporting: Admins and organizers can view reports on ticket sales,
 # revenue, and interest levels through visual charts.

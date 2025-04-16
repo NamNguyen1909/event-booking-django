@@ -39,7 +39,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'events.apps.EventsConfig',
     'rest_framework',
-    'drf_yasg'
+    'drf_yasg',
 ]
 
 MIDDLEWARE = [
@@ -143,6 +143,7 @@ cloudinary.config(
 
 AUTH_USER_MODEL= "events.User"
 
+#Đăng nhập bằng email hoặc tên người dùng
 AUTHENTICATION_BACKENDS = [
     'events.authentication.EmailOrUsernameModelBackend',  # backend custom
     'django.contrib.auth.backends.ModelBackend',  # backup default

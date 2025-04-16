@@ -13,7 +13,7 @@ from events.paginators import ItemPaginator
 
 # Đăng ký tài khoản
 #Cho phép người dùng đăng ký tài khoản với vai trò admin, organizer, hoặc attendee
-class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
+class UserViewSet(viewsets.ViewSet, generics.CreateAPIView,generics.ListAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [permissions.AllowAny]  # Cho phép mọi người đăng ký tài khoản
@@ -35,6 +35,20 @@ class EventViewSet(viewsets.ModelViewSet):
 
     def get_view_name(self):
         return "Quản lý sự kiện"
+    
+    #Tìm kiếm sự kiện theo category
+    #người dùng tìm kiếm sự kiện theo loại hình (âm nhạc, hội thảo, thể thao…)
+    #VD: GET /events/search-by-category/?category=music
+    @action(detail=False, methods=['get'], url_path='search-by-category')
+    def search_by_category(self, request):
+        """Tìm kiếm sự kiện theo loại hình (category)."""
+        category = request.query_params.get('category') #lấy tham số category từ quert string
+        if not category:
+            return Response({"error": "Category parameter is required."}, status=400)
+
+        events = self.queryset.filter(category__icontains=category)
+        serializer = self.get_serializer(events, many=True)
+        return Response(serializer.data)
 
 # Gợi ý theo sở thích
 # Hiển thị danh sách các tag để gợi ý sự kiện theo sở thích
@@ -83,14 +97,12 @@ class NotificationViewSet(viewsets.ViewSet, generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]  # Chỉ người dùng đã đăng nhập mới xem thông báo
 
     def get_queryset(self):
-        """Trả về thông báo liên quan đến các sự kiện của người dùng."""
+        """Trả về thông báo liên quan đến các sự kiện mà người dùng có vé tham gia."""
         user = self.request.user
-        if user.role == 'organizer':
-            # Nếu là organizer, trả về thông báo cho các sự kiện mà họ tổ chức
-            return Notification.objects.filter(event__organizer=user)
-        else:
-            # Nếu là attendee, trả về thông báo cho các sự kiện mà họ đã mua vé
-            return Notification.objects.filter(event__tickets__user=user).distinct()
+        # Lấy danh sách các sự kiện mà người dùng có vé
+        events = Event.objects.filter(tickets__user=user).distinct()
+        # Trả về thông báo liên quan đến các sự kiện đó
+        return Notification.objects.filter(event__in=events)
 
     def get_view_name(self):
         return "Thông báo và nhắc nhở"

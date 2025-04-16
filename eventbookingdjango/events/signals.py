@@ -3,7 +3,27 @@
 from django.db.models.signals import post_migrate
 from django.dispatch import receiver
 from django.contrib.auth import get_user_model
-from .models import Tag,Event
+from .models import Tag,Event,Notification,Ticket,Review,ChatMessage,EventTrendingLog
+
+
+#tự động tạo thông báo khi sự kiện được cập nhật
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=Event)
+def create_notification_for_event_update(sender, instance, created, **kwargs):
+    """Tạo thông báo khi sự kiện được cập nhật."""
+    if not created:  # Chỉ chạy khi sự kiện được cập nhật
+        tickets = Ticket.objects.filter(event=instance)
+        for ticket in tickets:
+            Notification.objects.create(
+                event=instance,
+                message=f"Sự kiện '{instance.title}' đã được cập nhật.",
+                notification_type='update'
+            )
+
+
+
 
 @receiver(post_migrate)
 def create_default_tags_and_users(sender, **kwargs):
