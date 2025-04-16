@@ -10,7 +10,7 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, Permis
 from datetime import timedelta
 from django.utils import timezone
 
-from django.core.validators import MinValueValidator, MaxValueValidator # Thêm validator này để kiểm tra giá trị tối đa/tối thiểu cho các trường số
+from django.core.validators import MinValueValidator, MaxValueValidator, ValidationError
 # Quản lý người dùng tùy chỉnh
 class UserManager(BaseUserManager):
     def create_user(self, username, email, password=None, **extra_fields):
@@ -29,40 +29,54 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         return self.create_user(username, email, password, **extra_fields)
+    
+class CustomerGroup(models.TextChoices):
+    NEW = 'new', 'Khách hàng mới'
+    REGULAR = 'regular', 'Khách phổ thông'
+    VIP = 'vip', 'Khách VIP'
+    SUPER_VIP = 'super_vip', 'Khách siêu VIP'
+    UNKNOWN = 'unknown', 'Không xác định'
 
 # Người dùng
-class User(AbstractBaseUser, PermissionsMixin):
+class User(AbstractBaseUser):
     ROLE_CHOICES = (
         ('admin', 'Admin'),
         ('organizer', 'Organizer'),
         ('attendee', 'Attendee'),
     )
 
-    username = models.CharField(max_length=150, unique=True)
-    email = models.EmailField(unique=True)
+    username = models.CharField(max_length=255, unique=True, db_index=True)
+    password = models.CharField(max_length=255)
+    email = models.EmailField(max_length=255, unique=True, db_index=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='attendee')
-    phone = models.CharField(max_length=20, blank=True, null=True)
+    phone = models.CharField(max_length=15, null=True, blank=True)
     avatar = CloudinaryField('avatar', null=True, blank=True)
-    #1 yếu tố để phân loại user
-    total_spent = models.DecimalField(max_digits=12, decimal_places=2, default=0,validators=[MinValueValidator(0)])
-    #Chọn khi tạo user, để gợi ý theo sở thích
+
+    #1 yếu tố để phân loại khách hàng
+    total_spent = models.DecimalField(max_digits=12, decimal_places=2, default=0, validators=[MinValueValidator(0)])
+    #chọn khi tạo mới tài khoản để gợi ý theo sở thích
     tags = models.ManyToManyField('Tag', blank=True, related_name='users')
 
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
+    is_superuser = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = UserManager()
 
-    # Dùng cả username lẫn email để login
     USERNAME_FIELD = 'username'
     REQUIRED_FIELDS = ['email']
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['role']),
+            models.Index(fields=['created_at']),
+        ]
 
     def __str__(self):
         return self.username or self.email
 
-    # Thêm các phương thức cần thiết cho quyền
     def has_perm(self, perm, obj=None):
         return self.is_superuser
 
@@ -86,6 +100,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     # Cho phép áp dụng mã giảm giá
 
 
+# Sự kiện
 class Event(models.Model):
     CATEGORY_CHOICES = (
         ('music', 'Music'),
@@ -100,51 +115,66 @@ class Event(models.Model):
     )
 
     organizer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='organized_events')
-    title = models.CharField(max_length=255)
+    title = models.CharField(max_length=255, db_index=True)
     description = models.TextField()
     category = models.CharField(max_length=50, choices=CATEGORY_CHOICES)
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
     is_active = models.BooleanField(default=True)
 
-    # Dùng khi kết nối bản đồ Google
     location = models.CharField(max_length=500)
     latitude = models.FloatField()
     longitude = models.FloatField()
 
-    total_tickets = models.IntegerField()
-    ticket_price = models.DecimalField(max_digits=9, decimal_places=2,validators=[MinValueValidator(0)])
+    total_tickets = models.IntegerField(validators=[MinValueValidator(0)])
+    ticket_price = models.DecimalField(max_digits=9, decimal_places=2, validators=[MinValueValidator(0)])
 
     tags = models.ManyToManyField('Tag', blank=True)
 
-    poster = CloudinaryField('poster', null=True, blank=True)  # Hình ảnh sự kiện
+    poster = CloudinaryField('poster', null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(start_time__lt=models.F('end_time')),
+                name='start_time_before_end_time'
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['start_time', 'end_time']),
+            models.Index(fields=['organizer']),
+        ]
+
     def __str__(self):
         return self.title
-    
-    def save(self, *args, **kwargs):
+
+    def clean(self):
         if self.start_time >= self.end_time:
-            raise ValueError("Start time must be before end time.")
-        super().save(*args, **kwargs)  # Gọi phương thức save của lớp cha để xử lý các tham số
-    
-    #hàm kiểm tra thời gian sau khi end_time qua thì is_active = False
+            raise ValidationError("Start time must be before end time.")
+        if self.organizer.role != 'organizer':
+            raise ValidationError("Only organizers can create events.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
     def check_event_status(self):
         if timezone.now() > self.end_time:
             self.is_active = False
             self.save()
 
 class Tag(models.Model):
-    name = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=50, unique=True, db_index=True)
 
     def __str__(self):
         return self.name
 
 class Ticket(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='tickets')
-    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='tickets')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='tickets')###
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='tickets')###
     qr_code = models.CharField(max_length=255, unique=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -154,8 +184,20 @@ class Ticket(models.Model):
     is_checked_in = models.BooleanField(default=False)
     check_in_date = models.DateTimeField(null=True, blank=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'event']),
+            models.Index(fields=['qr_code']),
+        ]
+
     def __str__(self):
         return f"Ticket of {self.user} for {self.event.title}"
+    
+    def save(self, *args, **kwargs):
+        if not self.pk:  # Chỉ kiểm tra khi tạo mới
+            if self.event.sold_tickets.count() >= self.event.total_tickets:
+                raise ValidationError("No more tickets available for this event.")
+        super().save(*args, **kwargs)
 
     def mark_as_paid(self, paid_at):
         """Đánh dấu vé là đã thanh toán."""
@@ -168,7 +210,8 @@ class Ticket(models.Model):
         if not self.is_checked_in:
             self.is_checked_in = True
             self.check_in_date = timezone.now()
-
+            self.save()
+        
 
  
 class Payment(models.Model):
@@ -200,16 +243,12 @@ class Payment(models.Model):
         for ticket in tickets:
             ticket.mark_as_paid(self.paid_at)  # Đánh dấu vé là đã thanh toán
 
-class CustomerGroup(models.TextChoices):
-    NEW = 'new', 'Khách hàng mới'
-    REGULAR = 'regular', 'Khách phổ thông'
-    VIP = 'vip', 'Khách VIP'
-    SUPER_VIP = 'super_vip', 'Khách siêu VIP'
-    UNKNOWN = 'unknown', 'Không xác định'
 
+
+# Mã giảm giá
 class DiscountCode(models.Model):
-    code = models.CharField(max_length=50, unique=True)
-    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2,validators=[MinValueValidator(0)])
+    code = models.CharField(max_length=50, unique=True, db_index=True)
+    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, validators=[MinValueValidator(0)])
     valid_from = models.DateTimeField()
     valid_to = models.DateTimeField()
     user_group = models.CharField(
@@ -217,10 +256,20 @@ class DiscountCode(models.Model):
         choices=CustomerGroup.choices,
         default=CustomerGroup.UNKNOWN
     )
-
     max_uses = models.PositiveIntegerField(null=True, blank=True)
     used_count = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(valid_from__lte=models.F('valid_to')),
+                name='valid_from_before_valid_to'
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['code', 'is_active']),
+        ]
 
     def __str__(self):
         return self.code
@@ -236,52 +285,73 @@ class DiscountCode(models.Model):
             return False
         return True
 
+# Thông báo
 class Notification(models.Model):
     NOTIFICATION_TYPES = (
         ('reminder', 'Reminder'),
         ('update', 'Event Update'),
     )
-    event = models.ForeignKey(Event, on_delete=models.CASCADE, null=True, blank=True)
-    message = models.TextField()
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, null=True, blank=True, related_name='event_notifications')
     notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES, default='general')
+    title = models.CharField(max_length=255)
+    message = models.TextField()
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['is_read']),
+        ]
+
+    def __str__(self):
+        return self.title
     # Chưa có cơ chế gửi email tự động (cần tích hợp với một dịch vụ gửi email như SendGrid hoặc Mailgun).
     # Chưa có cơ chế gửi thông báo đẩy (cần tích hợp với Firebase Cloud Messaging hoặc một dịch vụ tương tự).
 
+# Đánh giá
 class Review(models.Model):
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='reviews')
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    rating = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])  # Giới hạn từ 1 đến 5
-    comment = models.TextField(blank=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='event_reviews')
+    rating = models.PositiveIntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
+    comment = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['event', 'user']),
+        ]
+
+    def __str__(self):
+        return f"Review {self.rating} - {self.event.title}"
+
+# Tin nhắn trò chuyện
 class ChatMessage(models.Model):
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='chat_messages')
-    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')  # Người gửi
-    receiver = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_messages')  # Người nhận
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
+    receiver = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_messages')
     message = models.TextField()
-    is_from_organizer = models.BooleanField(default=False)  # Phân biệt tin nhắn từ ban tổ chức
+    is_from_organizer = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['event', 'sender', 'receiver']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.is_from_organizer and self.sender.role != 'organizer':
+            raise ValidationError("Only organizers can send messages as organizers.")
+        super().save(*args, **kwargs)
     # Chưa có cơ chế hỗ trợ chat real-time (cần tích hợp WebSocket hoặc Django Channels).
 
 class EventTrendingLog(models.Model):
     event = models.ForeignKey(Event, on_delete=models.CASCADE)
-    view_count = models.IntegerField(default=0) # Số lượt xem
-    ticket_sold_count = models.IntegerField(default=0) # Số vé đã bán
-    # like_count = models.IntegerField(default=0)  # Số lượt yêu thích
+    view_count = models.IntegerField(default=0)
+    ticket_sold_count = models.IntegerField(default=0)
     last_updated = models.DateTimeField(auto_now=True)
 
-# Nếu cần thêm tính năng yêu thích sự kiện, có thể tạo model Like như sau:
-# class Like(models.Model):
-#     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='likes')
-#     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='likes')
-#     created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        indexes = [
+            models.Index(fields=['event', 'last_updated']),
+        ]
 
-#     class Meta:
-#         constraints = [
-#             models.UniqueConstraint(fields=['user', 'event'], name='unique_user_event_like')
-#         ]
-
-#     def __str__(self):
-#         return f"{self.user.username} liked {self.event.title}"
