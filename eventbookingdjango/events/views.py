@@ -5,7 +5,7 @@ from rest_framework.decorators import action
 from django.db.models import Sum, Count
 from events.models import Event, User, Tag, Ticket, Payment, DiscountCode, Notification, Review, ChatMessage, EventTrendingLog
 from events.serializers import (
-    EventSerializer, UserSerializer, TagSerializer, TicketSerializer,
+    EventListSerializer,EventDetailSerializer, UserSerializer, TagSerializer, TicketSerializer,
     PaymentSerializer, DiscountCodeSerializer, NotificationSerializer,
     ReviewSerializer, ChatMessageSerializer, EventStatisticSerializer,EventTrendingLogSerializer
 )
@@ -29,9 +29,17 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
 #Cho phép organizer tạo, cập nhật, và quản lý sự kiện của mình
 class EventViewSet(viewsets.ModelViewSet):
     queryset = Event.objects.prefetch_related('tags').filter(is_active=True)
-    serializer_class = EventSerializer
+    serializer_class = EventDetailSerializer
+    parser_classes = [parsers.MultiPartParser, parsers.FormParser,JSONParser]  # Cho phép upload file (poster)
     pagination_class = ItemPaginator
-    permission_classes = [permissions.IsAuthenticated]  # Chỉ người dùng đã đăng nhập mới được truy cập
+    permission_classes = [perms.IsAdminOrOrganizerOwner]  # Chỉ admin và organizer có quyền tạo và chỉnh sửa
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return EventListSerializer
+        elif self.action == 'retrieve':
+            return EventDetailSerializer
+        return EventDetailSerializer
 
     def perform_create(self, serializer):
         """Gán organizer là người dùng hiện tại khi tạo sự kiện."""
@@ -59,12 +67,6 @@ class EventViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='reviews')
     def get_reviews(self, request, pk):
         """Lấy danh sách review cho sự kiện."""
-        # C1
-        # event = self.get_object()
-        # reviews = Review.objects.filter(event=event)
-        # serializer = ReviewSerializer(reviews, many=True)
-        # return Response(serializer.data)
-        # C2
         reviews=self.get_object().reviews_set.select_related('user').all()
         return Response(ReviewSerializer(reviews, many=True).data,status=status.HTTP_200_OK)
 
@@ -80,19 +82,61 @@ class TagViewSet(viewsets.ViewSet, generics.ListAPIView):
     def get_view_name(self):
         return "Danh sách Tag"
 
-# Đặt vé trực tuyến
-# Cho phép người dùng đặt vé trực tuyến
-class TicketViewSet(viewsets.ViewSet, generics.CreateAPIView):
+# Đặt vé và xem vé
+import qrcode
+# pip install qrcode[pil]
+from io import BytesIO
+from django.core.files.base import ContentFile
+
+class TicketViewSet(viewsets.ModelViewSet):
     queryset = Ticket.objects.all()
     serializer_class = TicketSerializer
-    permission_classes = [permissions.IsAuthenticated]  # Chỉ người dùng đã đăng nhập mới được đặt vé
+    permission_classes = [permissions.IsAuthenticated]  # Chỉ cần đăng nhập
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'admin':
+            return self.queryset  # Admin có thể xem tất cả vé
+            # return self.queryset.filter(user=user) #test: xem vé của admin khi admin đăng nhập
+        elif user.role == 'organizer':
+            # Organizer chỉ xem vé của sự kiện do họ tổ chức
+            return self.queryset.filter(event__organizer=user)
+        else:
+            # Người dùng chỉ xem vé của chính họ
+            return self.queryset.filter(user=user)
 
     def perform_create(self, serializer):
-        """Gán người dùng hiện tại khi đặt vé."""
-        serializer.save(user=self.request.user)
+        # Lấy event từ request
+        event_id = self.request.data.get('event_id')
+        event = Event.objects.get(pk=event_id)
 
-    def get_view_name(self):
-        return "Đặt vé trực tuyến"
+        # Tạo nội dung QR code (có thể tùy chỉnh)
+        qr_content = f"""
+        Ticket ID: {self.request.data.get('id')}
+        Event: {event.title}
+        User: {self.request.user.username}
+        Start Time: {event.start_time}
+        Location: {event.location}
+        """
+        
+        # Tạo QR code
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(qr_content)
+        qr.make(fit=True)
+
+        # Lưu QR code vào file
+        img = qr.make_image(fill_color="black", back_color="white")
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        qr_code_file = ContentFile(buffer.getvalue(), name=f"ticket_{event_id}_{self.request.user.id}.png")
+
+        # Lưu ticket với QR code
+        serializer.save(user=self.request.user, event=event, qr_code=qr_code_file)
 
 # Thanh toán vé
 # Xử lý thanh toán vé và cập nhật trạng thái vé
@@ -107,6 +151,16 @@ class PaymentViewSet(viewsets.ViewSet, generics.CreateAPIView):
 
     def get_view_name(self):
         return "Thanh toán vé"
+    
+    # giới hạn danh sách các Payment mà người dùng được phép truy cập tùy theo vai trò (role) của họ.
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'admin':
+            return self.queryset
+        elif user.role == 'organizer':
+            return self.queryset.filter(user__tickets__event__organizer=user).distinct()
+        return self.queryset.filter(user=user)
+
 
 # Thông báo và nhắc nhở
 # Hiển thị thông báo và nhắc nhở cho người dùng hiện tại

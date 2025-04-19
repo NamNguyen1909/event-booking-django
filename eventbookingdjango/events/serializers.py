@@ -10,16 +10,29 @@ class TagSerializer(ModelSerializer):
         fields = ['id', 'name']
 
 
+class EventListSerializer(ModelSerializer):
+    class Meta:
+        model = Event
+        fields = ['poster', 'title', 'location', 'start_time']
+
 # Tạo sự kiện (Organizer tạo sự kiện)
-class EventSerializer(ModelSerializer):
+class EventDetailSerializer(ModelSerializer):
     organizer = serializers.ReadOnlyField(source='organizer.id')  # Hiển thị ID của organizer
     organizer_name = serializers.ReadOnlyField(source='organizer.username')  # Hiển thị tên của organizer
-    tags = TagSerializer(many=True)  # Hiển thị tên các tag
+    tags = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(), many=True)  # Hỗ trợ gửi danh sách ID
+
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data['poster'] = instance.poster.url if instance.poster else ''
         return data
+    
+    def create(self, validated_data):
+        tags = validated_data.pop('tags', [])  # Lấy danh sách tag từ dữ liệu
+        event = Event(**validated_data)  # Tạo đối tượng Event mới
+        event.tags.set(tags) # Gán các tag cho event
+        event.save()
+        return event
 
     class Meta:
         model = Event
@@ -65,36 +78,51 @@ class UserSerializer(serializers.ModelSerializer):
     #     u.save()
     #     return u
 
+    #hàm thay đổi mật khẩu
+    def update(self, instance, validated_data):
+        # Lấy mật khẩu từ dữ liệu đã xác thực
+        password = validated_data.pop('password', None)
+        
+        # Nếu có mật khẩu, mã hóa và cập nhật
+        if password:
+            instance.set_password(password)
+        
+        # Cập nhật các trường khác
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        # Lưu thay đổi vào cơ sở dữ liệu
+        instance.save()
+        
+        # Trả về đối tượng đã cập nhật
+        return instance
 
 
 
 # Đặt vé trực tuyến
 class TicketSerializer(serializers.ModelSerializer):
-    event_detail = serializers.SerializerMethodField()  # Thông tin chi tiết về sự kiện
-    user_detail = serializers.SerializerMethodField()  # Thông tin chi tiết về người dùng
+    username = serializers.ReadOnlyField(source='user.username')  # Lấy tên người dùng
+    email = serializers.ReadOnlyField(source='user.email')  # Lấy email người dùng
+    event_title = serializers.ReadOnlyField(source='event.title')  # Lấy tiêu đề sự kiện
+    event_start_time = serializers.ReadOnlyField(source='event.start_time')  # Lấy thời gian bắt đầu sự kiện
+    event_location = serializers.ReadOnlyField(source='event.location')  # Lấy địa điểm sự kiện
 
     class Meta:
         model = Ticket
         fields = [
-            'id', 'user', 'user_detail', 'event', 'event_detail', 'qr_code',
-            'is_paid', 'purchase_date', 'is_checked_in', 'check_in_date', 'created_at'
+            'id', 'username', 'email', 'qr_code', 'purchase_date',
+            'event_title', 'event_start_time', 'event_location'
         ]
-        read_only_fields = ['id', 'qr_code', 'is_paid', 'purchase_date', 'is_checked_in', 'check_in_date', 'created_at']
+        read_only_fields = [
+            'id', 'username', 'email', 'qr_code', 'purchase_date',
+            'event_title', 'event_start_time', 'event_location'
+        ]
 
-    def get_event_detail(self, obj):
-        """Trả về thông tin chi tiết của sự kiện."""
-        return {
-            'title': obj.event.title,
-            'start_time': obj.event.start_time,
-            'location': obj.event.location,
-        }
-
-    def get_user_detail(self, obj):
-        """Trả về thông tin chi tiết của người dùng."""
-        return {
-            'username': obj.user.username,
-            'email': obj.user.email,
-        }
+    def create(self, validated_data):
+        # Tự động gán user và event từ context
+        user = self.context['request'].user
+        event = self.context['event']
+        return Ticket.objects.create(user=user, event=event, **validated_data)
     
 # Thanh toán vé
 class PaymentSerializer(serializers.ModelSerializer):
@@ -113,7 +141,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         }
 
     def get_tickets(self, obj):
-        tickets = obj.user.tickets.filter(is_paid=True)  # Lấy các vé đã thanh toán
+        tickets = obj.tickets.all()
         return [
             {
                 'id': ticket.id,
@@ -123,6 +151,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             }
             for ticket in tickets
         ]
+
     
 #Mã giảm giá cho khách hàng
 class DiscountCodeSerializer(serializers.ModelSerializer):
