@@ -1,10 +1,11 @@
 from datetime import timedelta
-from django.db import models
+from django.db import models,transaction
 from django.utils import timezone
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.core.exceptions import ValidationError
 from cloudinary.models import CloudinaryField
+import uuid
 
 # pip install qrcode[pil]
 import qrcode
@@ -98,6 +99,11 @@ class User(AbstractBaseUser):
 
 
 # Sự kiện
+class EventQuerySet(models.QuerySet):
+    def active(self):
+        return self.filter(is_active=True, end_time__gte=timezone.now())
+
+# Sự kiện
 class Event(models.Model):
     CATEGORY_CHOICES = (
         ('music', 'Music'),
@@ -120,19 +126,21 @@ class Event(models.Model):
     is_active = models.BooleanField(default=True)
 
     location = models.CharField(max_length=500)
-    latitude = models.FloatField()
-    longitude = models.FloatField()
+    latitude = models.FloatField(validators=[MinValueValidator(-90), MaxValueValidator(90)])
+    longitude = models.FloatField(validators=[MinValueValidator(-180), MaxValueValidator(180)])
 
     total_tickets = models.IntegerField(validators=[MinValueValidator(0)])
     ticket_price = models.DecimalField(max_digits=9, decimal_places=2, validators=[MinValueValidator(0)])
     sold_tickets = models.IntegerField(default=0, validators=[MinValueValidator(0)])
 
-    tags = models.ManyToManyField('Tag', blank=True)
+    tags = models.ManyToManyField('Tag', blank=True, related_name='events')
 
     poster = CloudinaryField('poster', null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = EventQuerySet.as_manager()
 
     class Meta:
         constraints = [
@@ -151,13 +159,17 @@ class Event(models.Model):
 
     def clean(self):
         if self.start_time >= self.end_time:
-            raise ValidationError("Start time must be before end time.")
+            raise ValidationError("Thời gian bắt đầu phải trước thời gian kết thúc.")
         if self.organizer.role != 'organizer':
-            raise ValidationError("Only organizers can create events.")
+            raise ValidationError("Chỉ có người tổ chức mới có thể tạo sự kiện.")
 
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
+
+    @property
+    def sold_tickets_count(self):
+        return self.tickets.count()
 
     def check_event_status(self):
         if timezone.now() > self.end_time:
@@ -192,13 +204,15 @@ class Ticket(models.Model):
         ]
 
     def __str__(self):
-        return f"Ticket of {self.user} for {self.event.title}"
-
+        return f"Vé của {self.user} - Sự kiện {self.event.title}"
+    
     def save(self, *args, **kwargs):
-        if not self.pk:  # Chỉ kiểm tra khi tạo mới
-            if self.event.sold_tickets >= self.event.total_tickets:
-                raise ValidationError("No more tickets available for this event.")
-        super().save(*args, **kwargs)
+        with transaction.atomic():
+            if not self.pk:  # Chỉ kiểm tra khi tạo mới
+                # Giả sử event có thuộc tính sold_tickets (tự tính hoặc trường riêng cập nhật)
+                if self.event.sold_tickets >= self.event.total_tickets:
+                    raise ValidationError("Hết vé cho sự kiện này.")
+            super().save(*args, **kwargs)
 
     def mark_as_paid(self, paid_at):
         self.is_paid = True
@@ -226,6 +240,8 @@ class Payment(models.Model):
     status = models.BooleanField(default=False)
     paid_at = models.DateTimeField(null=True, blank=True)
     transaction_id = models.CharField(max_length=255, unique=True)
+    discount_code = models.ForeignKey('DiscountCode', on_delete=models.SET_NULL, null=True, blank=True, related_name='payments')
+
 
     class Meta:
         indexes = [
@@ -233,45 +249,44 @@ class Payment(models.Model):
             models.Index(fields=['transaction_id']),
         ]
 
-    # def calculate_amount(self):
-    #     if not self.tickets.exists():
-    #         raise ValidationError("No tickets associated with this payment.")
-    #     total = sum(ticket.event.ticket_price for ticket in self.tickets.filter(is_paid=False))
-    #     return total
-    #
-    # def save(self, *args, **kwargs):
-    #     if not self.amount:
-    #         self.amount = self.calculate_amount()
-    #     if self.status == 'completed' and not self.paid_at:
-    #         self.paid_at = timezone.now()
-    #     super().save(*args, **kwargs)
-    #     if self.status == 'completed':
-    #         for ticket in self.tickets.filter(is_paid=False):
-    #             ticket.mark_as_paid(self.paid_at)
-    #     elif self.status in ['cancelled', 'refunded']:
-    #         for ticket in self.tickets.filter(is_paid=True):
-    #             ticket.is_paid = False
-    #             ticket.purchase_date = None
-    #             ticket.save()
-    def calculate_amount(self):
-        return sum(ticket.event.ticket_price for ticket in self.tickets.all() if not ticket.is_paid)
-
-
     def save(self, *args, **kwargs):
-        if not self.pk:
-            # Nếu là tạo mới (chưa có id), thì tự động lấy các vé chưa thanh toán
-            unpaid_tickets = Ticket.objects.filter(user=self.user, is_paid=False)
-            self.amount = sum(ticket.event.ticket_price for ticket in unpaid_tickets)
-            self.status = True
-            super().save(*args, **kwargs)  # Phải save trước khi gọi set() cho ManyToMany
-            self.tickets.set(unpaid_tickets)  # Gắn vé vào payment
-        else:
-            super().save(*args, **kwargs)
+        with transaction.atomic():
+            if not self.pk:
+                # Nếu là tạo mới (chưa có id), thì tự động lấy các vé chưa thanh toán
+                unpaid_tickets = Ticket.objects.filter(user=self.user, is_paid=False).select_related('event')
+                total = sum(ticket.event.ticket_price for ticket in unpaid_tickets)
 
-        # Cập nhật trạng thái các vé (chỉ vé liên quan đến payment)
-        for ticket in self.tickets.all():
-            if not ticket.is_paid:
-                ticket.mark_as_paid(self.paid_at)
+                # Áp dụng giảm giá nếu có
+                if self.discount_code and self.discount_code.is_valid():
+                    discount = total * (self.discount_code.discount_percentage / 100)
+                    total -= discount
+                self.amount = max(total, 0)
+
+                self.status = True  # Giả định là thanh toán thành công (bạn có thể tùy chỉnh)
+                if self.status and not self.paid_at:
+                    self.paid_at = timezone.now()
+
+                super().save(*args, **kwargs)  # Phải save trước khi gọi set() cho ManyToMany
+                self.tickets.set(unpaid_tickets)  # Gắn vé vào payment
+
+            else:
+                # Cập nhật thanh toán (nếu có cập nhật sau này)
+                if self.status and not self.paid_at:
+                    self.paid_at = timezone.now()
+                super().save(*args, **kwargs)
+
+            # Đánh dấu vé là đã thanh toán
+            for ticket in self.tickets.all():
+                if not ticket.is_paid:
+                    ticket.mark_as_paid(self.paid_at)
+
+            # Cập nhật số lần dùng của mã giảm giá
+            if self.discount_code and self.discount_code.is_valid():
+                self.discount_code.used_count += 1
+                self.discount_code.save()
+
+    def get_display_transaction_id(self):
+        return f"****{self.transaction_id[-4:]}"  # Hiển thị 4 ký tự cuối để bảo mật
 
 
 
@@ -289,13 +304,13 @@ class Review(models.Model):
         ]
 
     def __str__(self):
-        return f"Review {self.rating} - {self.event.title}"
+        return f"Đánh giá {self.rating} - {self.event.title}"
 
 
 # Mã giảm giá
 class DiscountCode(models.Model):
     code = models.CharField(max_length=50, unique=True, db_index=True)
-    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, validators=[MinValueValidator(0)])
+    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, validators=[MinValueValidator(0), MaxValueValidator(100)])
     valid_from = models.DateTimeField()
     valid_to = models.DateTimeField()
     user_group = models.CharField(
@@ -366,14 +381,14 @@ class ChatMessage(models.Model):
 
     def save(self, *args, **kwargs):
         if self.is_from_organizer and self.sender.role != 'organizer':
-            raise ValidationError("Only organizers can send messages as organizers.")
+            raise ValidationError("Chỉ có người tổ chức mới có thể gửi tin nhắn với tư cách người tổ chức.")
         super().save(*args, **kwargs)
 
-     # Chưa có cơ chế hỗ trợ chat real-time (cần tích hợp WebSocket hoặc Django Channels).
+    # Chưa có cơ chế hỗ trợ chat real-time (cần tích hợp WebSocket hoặc Django Channels).
 
 
 class EventTrendingLog(models.Model):
-    event = models.ForeignKey(Event, on_delete=models.CASCADE)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='trending_logs')
     view_count = models.IntegerField(default=0)
     ticket_sold_count = models.IntegerField(default=0)
     last_updated = models.DateTimeField(auto_now=True)
