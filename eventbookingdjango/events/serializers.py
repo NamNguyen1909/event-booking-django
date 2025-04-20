@@ -39,7 +39,7 @@ class EventDetailSerializer(ModelSerializer):
         fields = [
             'id', 'organizer', 'organizer_name', 'title', 'description', 'category',
             'start_time', 'end_time', 'is_active', 'location', 'latitude', 'longitude',
-            'total_tickets', 'ticket_price', 'tags', 'poster', 'created_at', 'updated_at'
+            'total_tickets', 'ticket_price', 'sold_tickets', 'tags', 'poster', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'organizer', 'organizer_name', 'created_at', 'updated_at']
 
@@ -127,7 +127,7 @@ class TicketSerializer(serializers.ModelSerializer):
 # Thanh toán vé
 class PaymentSerializer(serializers.ModelSerializer):
     user_detail = serializers.SerializerMethodField()
-    tickets = serializers.SerializerMethodField()  # Danh sách vé liên quan
+    tickets = TicketSerializer(many=True, read_only=True)  # Lấy danh sách vé đã mua
 
     class Meta:
         model = Payment

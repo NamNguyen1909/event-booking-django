@@ -1,5 +1,5 @@
 from datetime import timedelta
-from django.db import models,transaction
+from django.db import models, transaction
 from django.utils import timezone
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
@@ -81,7 +81,7 @@ class User(AbstractBaseUser):
 
     def has_perm(self, perm, obj=None):
         return self.is_superuser
-    
+
     def has_module_perms(self, app_label):
         return self.is_superuser
 
@@ -102,6 +102,7 @@ class User(AbstractBaseUser):
 class EventQuerySet(models.QuerySet):
     def active(self):
         return self.filter(is_active=True, end_time__gte=timezone.now())
+
 
 # Sự kiện
 class Event(models.Model):
@@ -167,14 +168,11 @@ class Event(models.Model):
         self.full_clean()
         super().save(*args, **kwargs)
 
-    @property
-    def sold_tickets_count(self):
-        return self.tickets.count()
-
-    def check_event_status(self):
-        if timezone.now() > self.end_time:
-            self.is_active = False
-            self.save()
+    #chuyển sang signals.py update_event_status
+    # def check_event_status(self):
+    #     if timezone.now() > self.end_time:
+    #         self.is_active = False
+    #         self.save()
 
 
 class Tag(models.Model):
@@ -205,7 +203,7 @@ class Ticket(models.Model):
 
     def __str__(self):
         return f"Vé của {self.user} - Sự kiện {self.event.title}"
-    
+
     def save(self, *args, **kwargs):
         with transaction.atomic():
             if not self.pk:  # Chỉ kiểm tra khi tạo mới
@@ -240,8 +238,8 @@ class Payment(models.Model):
     status = models.BooleanField(default=False)
     paid_at = models.DateTimeField(null=True, blank=True)
     transaction_id = models.CharField(max_length=255, unique=True)
-    discount_code = models.ForeignKey('DiscountCode', on_delete=models.SET_NULL, null=True, blank=True, related_name='payments')
-
+    discount_code = models.ForeignKey('DiscountCode', on_delete=models.SET_NULL, null=True, blank=True,
+                                      related_name='payments')
 
     class Meta:
         indexes = [
@@ -289,7 +287,6 @@ class Payment(models.Model):
         return f"****{self.transaction_id[-4:]}"  # Hiển thị 4 ký tự cuối để bảo mật
 
 
-
 # Đánh giá
 class Review(models.Model):
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='reviews')
@@ -310,7 +307,8 @@ class Review(models.Model):
 # Mã giảm giá
 class DiscountCode(models.Model):
     code = models.CharField(max_length=50, unique=True, db_index=True)
-    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, validators=[MinValueValidator(0), MaxValueValidator(100)])
+    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2,
+                                              validators=[MinValueValidator(0), MaxValueValidator(100)])
     valid_from = models.DateTimeField()
     valid_to = models.DateTimeField()
     user_group = models.CharField(
@@ -349,7 +347,8 @@ class Notification(models.Model):
         ('reminder', 'Reminder'),
         ('update', 'Event Update'),
     )
-    event = models.ForeignKey(Event, on_delete=models.CASCADE, null=True, blank=True, related_name='event_notifications')
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, null=True, blank=True,
+                              related_name='event_notifications')
     notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES, default='general')
     title = models.CharField(max_length=255)
     message = models.TextField()
@@ -358,7 +357,7 @@ class Notification(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=['is_read',]),
+            models.Index(fields=['is_read', ]),
         ]
 
     def __str__(self):
