@@ -12,6 +12,7 @@ from events.serializers import (
 from events.paginators import ItemPaginator
 from events import perms
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
+import uuid
 
 
 # Đăng ký tài khoản
@@ -110,15 +111,12 @@ class TicketViewSet(viewsets.ModelViewSet):
         event_id = self.request.data.get('event_id')
         event = Event.objects.get(pk=event_id)
 
-        # Tạo nội dung QR code (có thể tùy chỉnh)
-        qr_content = f"""
-        Ticket ID: {self.request.data.get('id')}
-        Event: {event.title}
-        User: {self.request.user.username}
-        Start Time: {event.start_time}
-        Location: {event.location}
-        """
-        
+        # Tạo ticket trước để có uuid
+        ticket = serializer.save(user=self.request.user, event=event)
+
+        # Tạo nội dung QR code dựa trên uuid của ticket
+        qr_content = str(ticket.uuid)
+
         # Tạo QR code
         qr = qrcode.QRCode(
             version=1,
@@ -133,10 +131,32 @@ class TicketViewSet(viewsets.ModelViewSet):
         img = qr.make_image(fill_color="black", back_color="white")
         buffer = BytesIO()
         img.save(buffer, format="PNG")
-        qr_code_file = ContentFile(buffer.getvalue(), name=f"ticket_{event_id}_{self.request.user.id}.png")
+        qr_code_file = ContentFile(buffer.getvalue(), name=f"ticket_{ticket.uuid}.png")
 
-        # Lưu ticket với QR code
-        serializer.save(user=self.request.user, event=event, qr_code=qr_code_file)
+        # Cập nhật lại ticket với QR code
+        ticket.qr_code.save(qr_code_file.name, qr_code_file)
+        ticket.save()
+
+    @action(detail=False, methods=['post'], url_path='verify')
+    def verify_ticket(self, request):
+        """Xác thực vé dựa trên uuid."""
+        uuid_str = request.data.get('uuid')
+        if not uuid_str:
+            return Response({"error": "UUID is required."}, status=400)
+        try:
+            ticket = Ticket.objects.get(uuid=uuid.UUID(uuid_str))
+        except (Ticket.DoesNotExist, ValueError):
+            return Response({"error": "Invalid ticket UUID."}, status=404)
+
+        # Kiểm tra trạng thái vé
+        if not ticket.is_paid:
+            return Response({"error": "Ticket is not paid."}, status=400)
+        if ticket.is_checked_in:
+            return Response({"error": "Ticket has already been checked in."}, status=400)
+
+        # Nếu hợp lệ, trả về thông tin vé
+        serializer = self.get_serializer(ticket)
+        return Response(serializer.data, status=200)
 
 # Thanh toán vé
 # Xử lý thanh toán vé và cập nhật trạng thái vé

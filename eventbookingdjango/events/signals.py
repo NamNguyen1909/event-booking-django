@@ -3,7 +3,7 @@
 from django.db.models.signals import post_migrate
 from django.dispatch import receiver
 from django.contrib.auth import get_user_model
-from .models import Tag,Event,Notification,Ticket,Review,ChatMessage,EventTrendingLog,Payment
+from .models import Tag,Event,Notification,Ticket,Review,ChatMessage,EventTrendingLog,Payment,DiscountCode
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
@@ -60,6 +60,11 @@ def update_user_total_spent(sender, instance, **kwargs):
 def update_event_status(sender, instance, **kwargs):
     if instance.end_time < timezone.now():
         instance.is_active = False
+
+@receiver(pre_save, sender=DiscountCode)
+def update_discount_code_status(sender, instance, **kwargs):
+    # Cập nhật trạng thái is_active dựa trên is_valid
+    instance.is_active = instance.is_valid()
 
 @receiver(post_save, sender=Ticket)
 def update_sold_tickets_on_save(sender, instance, created, **kwargs):

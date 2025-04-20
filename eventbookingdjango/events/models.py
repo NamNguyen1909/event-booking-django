@@ -186,6 +186,7 @@ class Tag(models.Model):
 class Ticket(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='tickets')
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='tickets')
+    uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     qr_code = CloudinaryField('qr_code', null=True, blank=True)  # Lưu QR code
 
     created_at = models.DateTimeField(auto_now_add=True)
