@@ -27,7 +27,7 @@ def create_notification_for_event_update(sender, instance, created, **kwargs):
 
 
 @receiver(post_migrate)
-def create_default_tags_and_users(sender, **kwargs):
+def create_default_tags(sender, **kwargs):
     # Tạo các tag mặc định
     default_tags = [
         'tech', 'health', 'education', 'religious', 'charity', 'networking',
@@ -36,6 +36,14 @@ def create_default_tags_and_users(sender, **kwargs):
         'art', 'film', 'sports_fan', 'fitness', 'music_band',
         'political', 'science', 'literature', 'music'
     ]
+    # Tạo superuser mặc định
+    User = get_user_model()
+    if not User.objects.filter(username='admin').exists():
+        User.objects.create_superuser(
+            username='admin',
+            email='admin@gmail.com',
+            password='123'
+        )
 
 # Signal để cập nhật total_spent của User khi Payment được lưu
 @receiver(post_save, sender=Payment)
