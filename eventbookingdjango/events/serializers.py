@@ -138,6 +138,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         return {
             'username': obj.user.username,
             'email': obj.user.email,
+            'phone': obj.user.phone,
         }
 
     def get_tickets(self, obj):
