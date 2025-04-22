@@ -1,18 +1,27 @@
-from rest_framework import viewsets, generics, permissions, status,parsers
+import uuid
+from django.db.models import Q, Sum, Count
+from django.utils import timezone
+
+from rest_framework import viewsets, generics, permissions, status, parsers
+from rest_framework.decorators import action
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.decorators import action
-from django.db.models import Sum, Count
-from events.models import Event, User, Tag, Ticket, Payment, DiscountCode, Notification, Review, ChatMessage, EventTrendingLog
+
+from events import perms
+from events.perms import IsAdminOrOrganizer, IsAdmin, IsOrganizer, ReviewOwner
+from events.models import (
+    Event, User, Tag, Ticket, Payment, DiscountCode,
+    Notification, Review, ChatMessage, EventTrendingLog
+)
 from events.serializers import (
-    EventSerializer,EventDetailSerializer, UserSerializer,UserDetailSerializer, TagSerializer, TicketSerializer,
-    PaymentSerializer, DiscountCodeSerializer, NotificationSerializer,
-    ReviewSerializer, ChatMessageSerializer, EventStatisticSerializer,EventTrendingLogSerializer
+    EventSerializer, EventDetailSerializer, UserSerializer, UserDetailSerializer,
+    TagSerializer, TicketSerializer, PaymentSerializer, DiscountCodeSerializer,
+    NotificationSerializer, ReviewSerializer, ChatMessageSerializer,
+    EventStatisticSerializer, EventTrendingLogSerializer
 )
 from events.paginators import ItemPaginator
-from events import perms
-from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
-import uuid
+
 
 
 # Đăng ký tài khoản
@@ -28,59 +37,125 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
 #Xem sự kiện
 # Cho phép người dùng xem danh sách sự kiện và chi tiết sự kiện
 # Chỉ admin và organizer mới có quyền tạo và chỉnh sửa sự kiện
-class EventViewSet(viewsets.ModelViewSet):
-    serializer_class = EventDetailSerializer
-    parser_classes = [parsers.MultiPartParser, parsers.FormParser,JSONParser]  # Cho phép upload file (poster)
+class EventViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView, generics.CreateAPIView):
+    queryset = Event.objects.all()
     pagination_class = ItemPaginator
-    permission_classes = [perms.IsAdminOrOrganizerOwner]  # Chỉ admin và organizer có quyền tạo và chỉnh sửa
-
-    def get_queryset(self):
-        user = self.request.user
-        if user.role == 'attendee':
-            return Event.objects.all() #xem được cả sự kiện đã kết thúc để xem review
-        elif user.role == 'organizer':
-            return Event.objects.filter(organizer=user)
-        elif user.role == 'admin':
-            return Event.objects.all()
-        else:
-            return Event.objects.none()
+    filter_backends = [perms.DjangoFilterBackend, perms.SearchFilter, perms.OrderingFilter]
+    filterset_fields = ['category', 'is_active']
+    search_fields = ['title', 'description', 'location']
+    ordering_fields = ['start_time', 'ticket_price']
+    parser_classes = [parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser]
 
     def get_serializer_class(self):
-        if self.action == 'list':
-            return EventSerializer
-        elif self.action == 'retrieve':
+        if self.action in ['retrieve', 'create', 'update', 'partial_update']:
             return EventDetailSerializer
-        return EventDetailSerializer
+        return EventSerializer
 
-    def perform_create(self, serializer):
-        """Gán organizer là người dùng hiện tại khi tạo sự kiện."""
-        serializer.save(organizer=self.request.user)
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve', 'suggest_events', 'hot_events', 'get_chat_messages']:
+            return [permissions.IsAuthenticated()]
+        elif self.action in ['create', 'update', 'partial_update', 'my_events']:
+            return [IsOrganizer()]
+        elif self.action == 'manage_reviews':
+            # GET cho phép tất cả, POST yêu cầu xác thực sẽ kiểm tra trong view
+            return [permissions.AllowAny()]
+        return [perms.IsAdminOrOrganizer(), perms.IsEventOrganizer()]
 
-    def get_view_name(self):
-        return "Quản lý sự kiện"
-    
-    #Tìm kiếm sự kiện theo category
-    #người dùng tìm kiếm sự kiện theo loại hình (âm nhạc, hội thảo, thể thao…)
-    #VD: GET /events/search-by-category/?category=music
-    @action(detail=False, methods=['get'], url_path='search-by-category')
-    def search_by_category(self, request):
-        """Tìm kiếm sự kiện theo loại hình (category)."""
-        category = request.query_params.get('category') #lấy tham số category từ quert string
-        if not category:
-            return Response({"error": "Category parameter is required."}, status=400)
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        event = serializer.save(organizer=request.user)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-        events = self.queryset.filter(category__icontains=category)
-        serializer = self.get_serializer(events, many=True)
+    def get_queryset(self):
+        queryset = self.queryset.select_related('organizer').prefetch_related('tags', 'reviews', 'event_notifications', 'chat_messages')
+        q = self.request.query_params.get('q')
+        if q:
+            queryset = queryset.filter(Q(title__icontains=q) | Q(description__icontains=q) | Q(location__icontains=q)| Q(category__icontains=q))
+        return queryset
+
+    @action(methods=['get'], detail=True, url_path='tickets')
+    def get_tickets(self, request, pk):
+        event = self.get_object()
+        tickets = event.tickets.filter(is_paid=True).select_related('user')
+        page = self.paginate_queryset(tickets)
+        serializer = TicketSerializer(page or tickets, many=True)
+        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+    @action(methods=['get', 'post'], detail=True, url_path='reviews')
+    def manage_reviews(self, request, pk):
+        event = self.get_object()
+        if request.method == 'POST':
+            if not request.user.is_authenticated:
+                return Response({"detail": "Yêu cầu xác thực."}, status=status.HTTP_401_UNAUTHORIZED)
+            serializer = ReviewSerializer(data={
+                'user': request.user.pk,
+                'event': pk,
+                'rating': request.data.get('rating'),
+                'comment': request.data.get('comment')
+            })
+            serializer.is_valid(raise_exception=True)
+            review = serializer.save()
+            return Response(ReviewSerializer(review).data, status=status.HTTP_201_CREATED)
+        reviews = event.reviews.all().select_related('user')
+        page = self.paginate_queryset(reviews)
+        serializer = ReviewSerializer(page or reviews, many=True)
+        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+    @action(methods=['get'], detail=True, url_path='chat-messages')
+    def get_chat_messages(self, request, pk):
+        event = self.get_object()
+        messages = event.chat_messages.all().select_related('sender', 'receiver')
+        page = self.paginate_queryset(messages)
+        serializer = ChatMessageSerializer(page or messages, many=True)
+        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='suggest')
+    def suggest_events(self, request):
+        user = request.user
+        user_tickets = Ticket.objects.filter(user=user).values('event__category').distinct()
+        categories = [ticket['event__category'] for ticket in user_tickets]
+        queryset = Event.objects.filter(
+            is_active=True,
+            start_time__gte=timezone.now()
+        ).select_related('organizer').prefetch_related('tags')
+        if categories:
+            queryset = queryset.filter(category__in=categories)
+        suggested_events = queryset.order_by('start_time')[:5]
+        serializer = self.get_serializer(suggested_events, many=True)
         return Response(serializer.data)
-    
-    #Hiển thị Review
-    #VD: GET /events/{event_id}/reviews
-    @action(detail=True, methods=['get'], url_path='reviews')
-    def get_reviews(self, request, pk):
-        """Lấy danh sách review cho sự kiện."""
-        reviews=self.get_object().reviews_set.select_related('user').all()
-        return Response(ReviewSerializer(reviews, many=True).data,status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=['get'], url_path='hot')
+    def hot_events(self, request):
+        hot_events = Event.objects.filter(
+            is_active=True,
+            start_time__gte=timezone.now()
+        ).annotate(tickets_sold=Count('tickets', filter=Q(tickets__is_paid=True))).order_by('-tickets_sold')[:5]
+        serializer = self.get_serializer(hot_events, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'], url_path='statistics')
+    def get_statistics(self, request, pk):
+        event = self.get_object()
+        if not (request.user == event.organizer or request.user.role == 'admin'):
+            return Response({"error": "Không có quyền truy cập."}, status=status.HTTP_403_FORBIDDEN)
+        tickets_sold = event.tickets.filter(is_paid=True).count()
+        revenue = sum(ticket.event.ticket_price for ticket in event.tickets.filter(is_paid=True))
+        data = {
+            'tickets_sold': tickets_sold,
+            'revenue': revenue,
+            'average_rating': event.reviews.aggregate(avg=Avg('rating'))['avg'] or 0
+        }
+        return Response(data)
+    @action(detail=False, methods=['get'], url_path='my-events')
+    def my_events(self, request):
+        """Trả về danh sách các sự kiện do organizer hiện tại tổ chức."""
+        user = request.user
+        if user.role != 'organizer':
+            return Response({"error": "You do not have permission to view this."}, status=403)
+        events = Event.objects.filter(organizer=user)
+        serializer = EventSerializer(events, many=True)
+        return Response(serializer.data)
 
 # Gợi ý theo sở thích
 # Hiển thị danh sách các tag để gợi ý sự kiện theo sở thích
@@ -245,7 +320,7 @@ class NotificationViewSet(viewsets.ViewSet, generics.ListAPIView):
 class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView,generics.DestroyAPIView):
     queryset = Review.objects.all()
     serializer_class = ReviewSerializer
-    permission_classes = [perms.ReviewOwner]  # Chỉ người dùng đã đăng nhập mới được truy cập
+    permission_classes = [perms.ReviewOwner]  # Chỉ người dùng đã đăng nhập mới được sửa review
 
     def get_queryset(self):
         """Trả về danh sách review cho sự kiện."""
@@ -319,7 +394,12 @@ class DiscountCodeViewSet(viewsets.ViewSet, generics.ListAPIView):
         return "Danh sách mã giảm giá"
     
 # View cho EventTrendingLog
-class EventTrendingLogViewSet(viewsets.ModelViewSet):
+class EventTrendingLogViewSet(mixins.ListModelMixin,
+                             mixins.RetrieveModelMixin,
+                             mixins.CreateModelMixin,
+                             mixins.UpdateModelMixin,
+                             mixins.DestroyModelMixin,
+                             viewsets.ViewSet):
     queryset = EventTrendingLog.objects.all()
     serializer_class = EventTrendingLogSerializer
     permission_classes = [permissions.IsAuthenticated]  # Chỉ người dùng đã đăng nhập mới được truy cập

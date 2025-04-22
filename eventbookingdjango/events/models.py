@@ -251,8 +251,8 @@ class Payment(models.Model):
     def save(self, *args, **kwargs):
         with transaction.atomic():
             if not self.pk:
-                # Nếu là tạo mới (chưa có id), thì tự động lấy các vé chưa thanh toán
-                unpaid_tickets = Ticket.objects.filter(user=self.user, is_paid=False).select_related('event')
+                # Nếu là tạo mới (chưa có id), thì tự động lấy các vé chưa thanh toán của sự kiện liên quan
+                unpaid_tickets = Ticket.objects.filter(user=self.user, is_paid=False, event__in=Event.objects.filter(tickets__user=self.user)).select_related('event').distinct()
                 total = sum(ticket.event.ticket_price for ticket in unpaid_tickets)
 
                 # Áp dụng giảm giá nếu có
