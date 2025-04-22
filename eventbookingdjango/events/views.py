@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from events import perms
-from events.perms import IsAdminOrOrganizer, IsAdmin, IsOrganizer, ReviewOwner
+from events.perms import IsAdminOrOrganizer, IsAdmin, IsOrganizer, ReviewOwner,IsEventOwnerOrAdmin,IsOrganizerOwner
 from events.models import (
     Event, User, Tag, Ticket, Payment, DiscountCode,
     Notification, Review, ChatMessage, EventTrendingLog
@@ -37,7 +37,7 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
 #Xem sự kiện
 # Cho phép người dùng xem danh sách sự kiện và chi tiết sự kiện
 # Chỉ admin và organizer mới có quyền tạo và chỉnh sửa sự kiện
-class EventViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView, generics.CreateAPIView):
+class EventViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView, generics.CreateAPIView,generics.UpdateAPIView):
     queryset = Event.objects.all()
     pagination_class = ItemPaginator
     filter_backends = [perms.DjangoFilterBackend, perms.SearchFilter, perms.OrderingFilter]
@@ -54,8 +54,10 @@ class EventViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIV
     def get_permissions(self):
         if self.action in ['list', 'retrieve', 'suggest_events', 'hot_events', 'get_chat_messages']:
             return [permissions.IsAuthenticated()]
-        elif self.action in ['create', 'update', 'partial_update', 'my_events']:
+        elif self.action in ['create', 'my_events']:
             return [IsOrganizer()]
+        elif self.action in ['update', 'partial_update']:
+            return [IsOrganizerOwner(),IsEventOwnerOrAdmin()]
         elif self.action == 'manage_reviews':
             # GET cho phép tất cả, POST yêu cầu xác thực sẽ kiểm tra trong view
             return [permissions.AllowAny()]
@@ -66,6 +68,21 @@ class EventViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIV
         serializer.is_valid(raise_exception=True)
         event = serializer.save(organizer=request.user)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        event = self.get_object()
+        serializer = EventDetailSerializer(event, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def partial_update(self, request, *args, **kwargs):
+        event = self.get_object()
+
+        serializer = EventDetailSerializer(event, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     def get_queryset(self):
         queryset = self.queryset.select_related('organizer').prefetch_related('tags', 'reviews', 'event_notifications', 'chat_messages')
