@@ -5,7 +5,7 @@ from rest_framework.decorators import action
 from django.db.models import Sum, Count
 from events.models import Event, User, Tag, Ticket, Payment, DiscountCode, Notification, Review, ChatMessage, EventTrendingLog
 from events.serializers import (
-    EventListSerializer,EventDetailSerializer, UserSerializer, TagSerializer, TicketSerializer,
+    EventSerializer,EventDetailSerializer, UserSerializer,UserDetailSerializer, TagSerializer, TicketSerializer,
     PaymentSerializer, DiscountCodeSerializer, NotificationSerializer,
     ReviewSerializer, ChatMessageSerializer, EventStatisticSerializer,EventTrendingLogSerializer
 )
@@ -16,7 +16,6 @@ import uuid
 
 
 # Đăng ký tài khoản
-#Cho phép người dùng đăng ký tài khoản với vai trò admin, organizer, hoặc attendee
 class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
     queryset = User.objects.filter(is_active=True)
     serializer_class = UserSerializer
@@ -26,18 +25,29 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
     def get_view_name(self):
         return "Đăng ký tài khoản"
 
-# Tạo sự kiện (chỉ dành cho organizer)
-#Cho phép organizer tạo, cập nhật, và quản lý sự kiện của mình
+#Xem sự kiện
+# Cho phép người dùng xem danh sách sự kiện và chi tiết sự kiện
+# Chỉ admin và organizer mới có quyền tạo và chỉnh sửa sự kiện
 class EventViewSet(viewsets.ModelViewSet):
-    queryset = Event.objects.prefetch_related('tags').filter(is_active=True)
     serializer_class = EventDetailSerializer
     parser_classes = [parsers.MultiPartParser, parsers.FormParser,JSONParser]  # Cho phép upload file (poster)
     pagination_class = ItemPaginator
     permission_classes = [perms.IsAdminOrOrganizerOwner]  # Chỉ admin và organizer có quyền tạo và chỉnh sửa
 
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'attendee':
+            return Event.objects.all() #xem được cả sự kiện đã kết thúc để xem review
+        elif user.role == 'organizer':
+            return Event.objects.filter(organizer=user)
+        elif user.role == 'admin':
+            return Event.objects.all()
+        else:
+            return Event.objects.none()
+
     def get_serializer_class(self):
         if self.action == 'list':
-            return EventListSerializer
+            return EventSerializer
         elif self.action == 'retrieve':
             return EventDetailSerializer
         return EventDetailSerializer
@@ -83,17 +93,43 @@ class TagViewSet(viewsets.ViewSet, generics.ListAPIView):
     def get_view_name(self):
         return "Danh sách Tag"
 
+# Xem và cập nhật profile người dùng, bao gồm thay đổi password
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
+from rest_framework import status
+
+from rest_framework import mixins, viewsets
+from rest_framework.permissions import IsAuthenticated
+
+class UserProfileViewSet(mixins.RetrieveModelMixin,
+                         mixins.UpdateModelMixin,
+                         viewsets.GenericViewSet):
+    serializer_class = UserDetailSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
 # Đặt vé và xem vé
 import qrcode
 # pip install qrcode[pil]
 from io import BytesIO
 from django.core.files.base import ContentFile
 
-class TicketViewSet(viewsets.ModelViewSet):
+from rest_framework import mixins
+#TicketViewSet cho phép người dùng đặt vé cho sự kiện và xem thông tin vé của mình
+class TicketViewSet(viewsets.GenericViewSet,
+                    mixins.ListModelMixin,
+                    mixins.RetrieveModelMixin,
+                    mixins.CreateModelMixin):
+    """
+    - Admin có thể xem và thao tác tất cả vé.
+    - Organizer chỉ xem và thao tác vé của sự kiện do họ tổ chức.
+    - Attendee chỉ xem và thao tác vé của chính họ.
+    """
     queryset = Ticket.objects.all()
     serializer_class = TicketSerializer
-    permission_classes = [permissions.IsAuthenticated]  # Chỉ cần đăng nhập
-
+    permission_classes = [permissions.IsAuthenticated]  
     def get_queryset(self):
         user = self.request.user
         if user.role == 'admin':
@@ -147,6 +183,10 @@ class TicketViewSet(viewsets.ModelViewSet):
             ticket = Ticket.objects.get(uuid=uuid.UUID(uuid_str))
         except (Ticket.DoesNotExist, ValueError):
             return Response({"error": "Invalid ticket UUID."}, status=404)
+
+        # Kiểm tra organizer có quyền verify vé này không
+        if request.user.role == 'organizer' and ticket.event.organizer != request.user:
+            return Response({"error": "You do not have permission to verify this ticket."}, status=403)
 
         # Kiểm tra trạng thái vé
         if not ticket.is_paid:

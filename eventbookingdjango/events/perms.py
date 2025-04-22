@@ -31,3 +31,4 @@ class IsAdminOrOrganizerOwner(permissions.BasePermission):
             return True
         # Các vai trò khác không có quyền
         return False
+
