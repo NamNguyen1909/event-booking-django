@@ -40,6 +40,8 @@ INSTALLED_APPS = [
     'events.apps.EventsConfig',
     'rest_framework',
     'drf_yasg',
+    'oauth2_provider',
+
 ]
 
 MIDDLEWARE = [
@@ -148,3 +150,15 @@ AUTHENTICATION_BACKENDS = [
     'events.authentication.EmailOrUsernameModelBackend',  # backend custom
     'django.contrib.auth.backends.ModelBackend',  # backup default
 ]
+
+# Trả về json thay vì form
+OAUTH2_PROVIDER = { 'OAUTH2_BACKEND_CLASS': 'oauth2_provider.oauth2_backends.JSONOAuthLibCore' }
+
+REST_FRAMEWORK = {
+        'DEFAULT_AUTHENTICATION_CLASSES': (
+            'oauth2_provider.contrib.rest_framework.OAuth2Authentication',
+    )
+}
+
+CLIENT_ID="uvpvDYutvd2py1sAUB5mhkHLhz1CvG6CneydvaCF"
+CLIENT_SECRET="kvG6uQVvt05Mdhe2PCiRsAtzMnz4PBIQTagjRqSvhF3izvIVe5rXnXVuWQMdG1MshqScT1AdaXd5WVLHWRmUPpflbioCQkKknOqrtqaVzcCY5YX4eOFQzK92Fg2RQbXU"

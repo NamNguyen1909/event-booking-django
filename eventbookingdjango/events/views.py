@@ -10,6 +10,9 @@ from rest_framework.views import APIView
 
 from events import perms
 from events.perms import IsAdminOrOrganizer, IsAdmin, IsOrganizer, ReviewOwner,IsEventOwnerOrAdmin,IsOrganizerOwner
+
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter, OrderingFilter
 from events.models import (
     Event, User, Tag, Ticket, Payment, DiscountCode,
     Notification, Review, ChatMessage, EventTrendingLog
@@ -33,6 +36,18 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
 
     def get_view_name(self):
         return "Đăng ký tài khoản"
+    
+    @action(methods=['get','patch'],url_path='current-user',detail=False,permission_classes = [permissions.IsAuthenticated]) #detail false để không lộ id => security | để permission_classes p73 đây thì chỉ có cái này cần chứng thực
+    def get_current_user(self,request):
+        u=request.user
+        if request.method.__eq__('PATCH'): #cập nhật
+            for k,v in request.data.items():
+                if k in ['first_name','last_name']:
+                    setattr(u,k,v) # u.k=v
+                elif k.__eq__('password'):
+                    u.set_password(v)
+            u.save()
+        return Response(UserSerializer(u).data)
 
 #Xem sự kiện
 # Cho phép người dùng xem danh sách sự kiện và chi tiết sự kiện
@@ -40,7 +55,7 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
 class EventViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView, generics.CreateAPIView,generics.UpdateAPIView):
     queryset = Event.objects.all()
     pagination_class = ItemPaginator
-    filter_backends = [perms.DjangoFilterBackend, perms.SearchFilter, perms.OrderingFilter]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['category', 'is_active']
     search_fields = ['title', 'description', 'location']
     ordering_fields = ['start_time', 'ticket_price']
@@ -193,9 +208,7 @@ from rest_framework import status
 from rest_framework import mixins, viewsets
 from rest_framework.permissions import IsAuthenticated
 
-class UserProfileViewSet(mixins.RetrieveModelMixin,
-                         mixins.UpdateModelMixin,
-                         viewsets.GenericViewSet):
+class UserProfileViewSet(viewsets.ViewSet,generics.RetrieveAPIView):
     serializer_class = UserDetailSerializer
     permission_classes = [IsAuthenticated]
 

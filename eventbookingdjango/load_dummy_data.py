@@ -233,7 +233,6 @@ def load_dummy_data():
             receiver=receiver,
             message=chat_data['message'],
             is_from_organizer=is_from_organizer,
-            is_read=chat_data.get('is_read', False)
         )
         chat_message.save()
         print(f"Đã tạo chat message trong event {event.title} bởi {sender.username}")

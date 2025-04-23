@@ -36,6 +36,9 @@ def create_default_tags(sender, **kwargs):
         'art', 'film', 'sports_fan', 'fitness', 'music_band',
         'political', 'science', 'literature', 'music'
     ]
+    # Tạo Tag objects nếu chưa tồn tại
+    for tag_name in default_tags:
+        Tag.objects.get_or_create(name=tag_name)
     # Tạo superuser mặc định
     User = get_user_model()
     if not User.objects.filter(username='admin').exists():

@@ -237,16 +237,14 @@
             "sender": "alice_brown",
             "receiver": "jane_smith",
             "message": "Looking forward to seeing you at the festival!",
-            "is_from_organizer": true,
-            "is_read": false
+            "is_from_organizer": true
         },
         {
             "event": "Tech Conference 2025",
             "sender": "alice_brown",
             "receiver": "john_doe",
             "message": "We have updated the schedule for the conference.",
-            "is_from_organizer": true,
-            "is_read": false
+            "is_from_organizer": true
         }
     ],
     "event_trending_logs": [
