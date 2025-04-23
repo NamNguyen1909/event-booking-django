@@ -102,6 +102,11 @@ class ReviewSerializer(serializers.ModelSerializer):
         fields = ['id', 'user', 'user_infor', 'event', 'rating', 'comment', 'created_at']
         read_only_fields = ['id', 'created_at']
 
+    def validate_rating(self, value):
+        if not (1 <= value <= 5):
+            raise serializers.ValidationError("Điểm đánh giá phải từ 1 đến 5.")
+        return value
+
     def get_user_infor(self, obj):
         """Trả về thông tin chi tiết của người dùng."""
         return {
@@ -117,7 +122,7 @@ class ChatMessageSerializer(ModelSerializer):
     class Meta:
         model = ChatMessage
         fields = ['id', 'event', 'sender', 'receiver', 'message', 'is_from_organizer', 'created_at', 'user_info']
-        read_only_fields = ['id', 'created_at', 'user_info']
+        read_only_fields = ['id', 'event', 'created_at', 'user_info','is_from_organizer',]
 
     def get_user_info(self, obj):
         return {
@@ -128,10 +133,16 @@ class ChatMessageSerializer(ModelSerializer):
 # Thống kê sự kiện nổi bật (Trending Events)
 class EventTrendingLogSerializer(serializers.ModelSerializer):
     event_title = serializers.ReadOnlyField(source='event.title')  # Lấy tiêu đề sự kiện
+    event_poster = serializers.ReadOnlyField(source='event.poster.url')  # Lấy poster sự kiện
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['poster'] = instance.event.poster.url if instance.event.poster else ''
+        return data
 
     class Meta:
         model = EventTrendingLog
-        fields = ['id', 'event', 'event_title', 'view_count', 'ticket_sold_count', 'last_updated']
+        fields = ['id', 'event', 'event_title','event_poster', 'view_count', 'ticket_sold_count', 'last_updated']
         read_only_fields = ['id', 'event_title', 'last_updated']
 
     
