@@ -7,6 +7,7 @@ from .models import (
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import F
+from django.db import models
 
 
 # Serializer cho Tag (không phụ thuộc serializer nào khác)
@@ -290,31 +291,6 @@ class EventTrendingLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = EventTrendingLog
-        fields = ['id', 'event', 'event_title', 'event_poster', 'view_count', 'ticket_sold_count', 'last_updated']
+        fields = ['id', 'event', 'event_title', 'event_poster', 'view_count', 'total_revenue', 'trending_score', 'last_updated']
         read_only_fields = ['id', 'event_title', 'last_updated']
 
-
-# class EventStatisticSerializer(serializers.ModelSerializer):
-#     total_tickets_sold = serializers.SerializerMethodField()
-#     total_revenue = serializers.SerializerMethodField()
-#     view_count = serializers.SerializerMethodField()  # Thống kê số lượt xem
-
-#     class Meta:
-#         model = Event
-#         fields = ['id', 'title', 'total_tickets_sold', 'total_revenue', 'view_count']
-
-#     def get_total_tickets_sold(self, obj):
-#         """Trả về tổng số vé đã bán."""
-#         return Ticket.objects.filter(event=obj, is_paid=True).count()
-
-#     def get_total_revenue(self, obj):
-#         """Trả về tổng doanh thu từ sự kiện."""
-#         total = Ticket.objects.filter(event=obj, is_paid=True).aggregate(
-#             total=models.Sum('event__ticket_price')
-#         )['total']
-#         return total or 0
-
-#     def get_view_count(self, obj):
-#         """Trả về số lượt xem của sự kiện."""
-#         trending_log = EventTrendingLog.objects.filter(event=obj).first()
-#         return trending_log.view_count if trending_log else 0

@@ -76,6 +76,10 @@ def update_sold_tickets_on_save(sender, instance, created, **kwargs):
         Event.objects.filter(pk=instance.event.pk).update(
             sold_tickets=F('sold_tickets') + 1
         )
+        # Update EventTrendingLog total_revenue and trending_score
+        trending_log, _ = EventTrendingLog.objects.get_or_create(event=instance.event)
+        trending_log.total_revenue = trending_log.total_revenue + instance.event.ticket_price
+        trending_log.calculate_trending_score()
     elif not created:
         # Nếu là update và is_paid vừa chuyển từ False -> True
         old = Ticket.objects.get(pk=instance.pk)
@@ -83,6 +87,10 @@ def update_sold_tickets_on_save(sender, instance, created, **kwargs):
             Event.objects.filter(pk=instance.event.pk).update(
                 sold_tickets=F('sold_tickets') + 1
             )
+            # Update EventTrendingLog total_revenue and trending_score
+            trending_log, _ = EventTrendingLog.objects.get_or_create(event=instance.event)
+            trending_log.total_revenue = trending_log.total_revenue + instance.event.ticket_price
+            trending_log.calculate_trending_score()
 
 
 # Signal để cập nhật sold_tickets của Event khi Ticket bị xóa
@@ -92,3 +100,13 @@ def update_sold_tickets_on_delete(sender, instance, **kwargs):
         event = instance.event
         event.sold_tickets = event.tickets.count()  # type: ignore
         event.save()
+
+# Signal để tự động tạo EventTrendingLog khi tạo Event mới
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from .models import Event, EventTrendingLog
+
+@receiver(post_save, sender=Event)
+def create_event_trending_log(sender, instance, created, **kwargs):
+    if created:
+        EventTrendingLog.objects.create(event=instance)

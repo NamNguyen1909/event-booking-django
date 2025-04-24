@@ -13,7 +13,6 @@ router.register(r'notifications', views.NotificationViewSet, basename='notificat
 router.register(r'reviews', views.ReviewViewSet, basename='review')
 router.register(r'chat_messages', views.ChatMessageViewSet, basename='chat_message')
 router.register(r'event_trending_logs', views.EventTrendingLogViewSet, basename='event_trending_log')
-router.register(r'user-profile', views.UserProfileViewSet, basename='user-profile')
 
 urlpatterns = [
     path('', include(router.urls)),

@@ -350,19 +350,26 @@ class Notification(models.Model):
     )
     event = models.ForeignKey(Event, on_delete=models.CASCADE, null=True, blank=True,
                               related_name='event_notifications')
-    notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES, default='general')
+    notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES, default='reminder')
     title = models.CharField(max_length=255)
     message = models.TextField()
-    is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        indexes = [
-            models.Index(fields=['is_read', ]),
-        ]
 
     def __str__(self):
         return self.title
+
+# Chưa có cơ chế gửi thông báo real-time (cần tích hợp WebSocket hoặc Django Channels).
+# Để đánh dấu thông báo  đã được người dùng đọc hay chưa
+class UserNotification(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user_notifications')
+    notification = models.ForeignKey(Notification, on_delete=models.CASCADE, related_name='user_notifications')
+    is_read = models.BooleanField(default=False)
+    read_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'notification')  # Mỗi user - notification chỉ 1 bản ghi
+
 
 
 # Tin nhắn trò chuyện
@@ -387,13 +394,40 @@ class ChatMessage(models.Model):
     # Chưa có cơ chế hỗ trợ chat real-time (cần tích hợp WebSocket hoặc Django Channels).
 
 
+import math
+from datetime import date
+
 class EventTrendingLog(models.Model):
-    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='trending_logs')
+    event = models.OneToOneField(Event, on_delete=models.CASCADE, related_name='trending_log')
     view_count = models.IntegerField(default=0)
-    ticket_sold_count = models.IntegerField(default=0)
+    total_revenue = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    trending_score = models.DecimalField(max_digits=10, decimal_places=4, default=0)
     last_updated = models.DateTimeField(auto_now=True)
+
+    def calculate_trending_score(self):
+        today = date.today()
+        sold_tickets = self.event.sold_tickets
+        total_tickets = self.event.total_tickets
+        sales_start_date = self.event.created_at.date() if self.event.created_at else today
+
+        # Tỷ lệ vé đã bán
+        sold_ratio = sold_tickets / total_tickets if total_tickets else 0
+        # Tốc độ bán
+        days_since_sales_start = (today - sales_start_date).days or 1
+        velocity = sold_tickets / days_since_sales_start
+        views = self.view_count
+
+        # Điểm trending (giả định đã chuẩn hóa các giá trị)
+        score = (
+            (sold_ratio * 0.5) +
+            (velocity * 0.3) +
+            (math.log(views + 1) * 0.2)
+        )
+        self.trending_score = round(score, 4)
+        self.save(update_fields=['trending_score'])
 
     class Meta:
         indexes = [
             models.Index(fields=['event', 'last_updated']),
         ]
+        ordering = ['-trending_score']

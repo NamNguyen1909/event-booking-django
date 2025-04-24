@@ -8,22 +8,20 @@ from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from events import perms
-from events.perms import IsAdminOrOrganizer, IsAdmin, IsOrganizer, ReviewOwner,IsEventOwnerOrAdmin,IsOrganizerOwner
+from . import perms
 
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
-from events.models import (
+from .models import (
     Event, User, Tag, Ticket, Payment, DiscountCode,
     Notification, Review, ChatMessage, EventTrendingLog
 )
-from events.serializers import (
+from .serializers import (
     EventSerializer, EventDetailSerializer, UserSerializer, UserDetailSerializer,
     TagSerializer, TicketSerializer, PaymentSerializer, DiscountCodeSerializer,
-    NotificationSerializer, ReviewSerializer, ChatMessageSerializer,
-    EventStatisticSerializer, EventTrendingLogSerializer
+    NotificationSerializer, ReviewSerializer, ChatMessageSerializer, EventTrendingLogSerializer
 )
-from events.paginators import ItemPaginator
+from .paginators import ItemPaginator
 from rest_framework import serializers
 
 
@@ -95,13 +93,124 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
     #     serializer = serializers.ReviewSerializer(page or reviews, many=True)
     #     return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
 
-    @action(methods=['get'], detail=False, url_path='notifications')
-    def get_notifications(self, request):
-        user = request.user
 
-        # Lọc thông báo dựa trên vé của người dùng
+
+    # lazy loading / infinite scroll
+
+    # Backend (API) vẫn phân trang bình thường (?page=1, ?page=2, ...)
+    # Frontend (Vue/React/Next.js...) sẽ:
+    # Gọi GET /api/my-notifications/?page=1 khi vừa load
+    # Khi kéo xuống gần cuối danh sách → gọi GET /api/my-notifications/?page=2 để load tiếp
+    # Append (nối thêm) vào danh sách đang hiển thị
+    @action(detail=False, methods=['get'], url_path='my-notifications')
+    def my_notifications(self, request):
+        user = request.user
         tickets = Ticket.objects.filter(user=user).values('event_id')
         notifications = Notification.objects.filter(event__id__in=tickets).select_related('event')
+        page = self.paginate_queryset(notifications)
+        serializer = serializers.NotificationSerializer(page or notifications, many=True)
+        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+    @action(methods=['get'], detail=False, url_path='sent-messages')
+    def get_sent_messages(self, request):
+        user = request.user
+
+        messages = user.sent_messages.all().select_related('event', 'receiver')
+        page = self.paginate_queryset(messages)
+        serializer = serializers.ChatMessageSerializer(page or messages, many=True)
+        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+    serializer_class = UserSerializer
+    pagination_class = ItemPaginator
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ['username', 'email', 'phone']
+    ordering_fields = ['created_at', 'username']
+
+    def get_permissions(self):
+        if self.action in ['get_current_user', 'tickets', 'payments', 'notifications', 'sent_messages', 'profile', 'deactivate']:
+            return [permissions.IsAuthenticated()]
+        elif self.action in ['create']:
+            return [permissions.AllowAny()]
+
+    def create(self, request, *args, **kwargs):
+        role = request.data.get('role', 'attendee')
+        if role not in ['admin', 'organizer', 'attendee']:
+            return Response({"error": "Vai trò không hợp lệ."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(methods=['get', 'patch'], detail=False, url_path='current-user')
+    def get_current_user(self, request):
+        user = request.user
+        if request.method == 'PATCH':
+            serializer = self.get_serializer(user, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(self.get_serializer(user).data)
+        else:
+            serializer = UserDetailSerializer(user)
+            return Response(serializer.data)
+
+    @action(methods=['post'], detail=False, url_path='deactivate')
+    def deactivate(self, request):
+        user = request.user
+        user.is_active = False
+        user.save()
+        return Response({"detail": "Tài khoản đã bị xóa!."}, status=status.HTTP_200_OK)
+
+    @action(methods=['get'], detail=False, url_path='tickets')
+    def get_tickets(self, request):
+        user = request.user
+
+        tickets = user.tickets.all().select_related('event')
+        page = self.paginate_queryset(tickets)
+        serializer = serializers.TicketSerializer(page or tickets, many=True)
+        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+    @action(methods=['get'], detail=False, url_path='payments')
+    def get_payments(self, request):
+        user = request.user
+
+        payments = user.payments.all().select_related('discount_code')
+        page = self.paginate_queryset(payments)
+        serializer = serializers.PaymentSerializer(page or payments, many=True)
+        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+    # @action(methods=['get'], detail=False, url_path='reviews')
+    # def get_reviews(self, request):
+    #     user = request.user
+    #     reviews = user.event_reviews.all().select_related('event')
+    #     page = self.paginate_queryset(reviews)
+    #     serializer = serializers.ReviewSerializer(page or reviews, many=True)
+    #     return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+    # @action(methods=['get'], detail=False, url_path='notifications')
+    # def get_notifications(self, request):
+    #     user = request.user
+
+    #     # Lọc thông báo dựa trên vé của người dùng
+    #     tickets = Ticket.objects.filter(user=user).values('event_id')
+    #     notifications = Notification.objects.filter(event__id__in=tickets).select_related('event')
+    #     page = self.paginate_queryset(notifications)
+    #     serializer = serializers.NotificationSerializer(page or notifications, many=True)
+    #     return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+
+
+
+    # lazy loading / infinite scroll
+
+    # Backend (API) vẫn phân trang bình thường (?page=1, ?page=2, ...)
+    # Frontend (Vue/React/Next.js...) sẽ:
+    # Gọi GET /api/my-notifications/?page=1 khi vừa load
+    # Khi kéo xuống gần cuối danh sách → gọi GET /api/my-notifications/?page=2 để load tiếp
+    # Append (nối thêm) vào danh sách đang hiển thị
+    @action(detail=False, methods=['get'], url_path='my-notifications')
+    def my_notifications(self, request):
+        user = request.user
+        events = Event.objects.filter(tickets__user=user, tickets__is_checked_in=False).distinct()
+        notifications = Notification.objects.filter(event__in=events)
         page = self.paginate_queryset(notifications)
         serializer = serializers.NotificationSerializer(page or notifications, many=True)
         return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
@@ -137,9 +246,9 @@ class EventViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIV
         if self.action in ['list', 'retrieve', 'suggest_events', 'hot_events', 'get_chat_messages']:
             return [permissions.IsAuthenticated()]
         elif self.action in ['create']:
-            return [IsOrganizer()]
+            return [perms.IsOrganizerUser()]
         elif self.action in ['update', 'partial_update', 'my_events']:
-            return [IsOrganizerOwner()]
+            return [perms.IsOrganizerOwner()]
         elif self.action == 'manage_reviews':
             # GET cho phép tất cả, POST yêu cầu xác thực sẽ kiểm tra trong view
             return [permissions.AllowAny()]
@@ -265,21 +374,20 @@ class EventViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIV
         return Response(serializer.data)
 
 
-# Gợi ý theo sở thích
 # Hiển thị danh sách các tag để gợi ý sự kiện theo sở thích
-class TagViewSet(viewsets.ViewSet, generics.ListAPIView):
+class TagViewSet(viewsets.ViewSet, generics.ListAPIView,generics.CreateAPIView,generics.UpdateAPIView,generics.DestroyAPIView):
     queryset = Tag.objects.all()
     serializer_class = TagSerializer
     pagination_class = ItemPaginator
-    permission_classes = [permissions.AllowAny]  # Cho phép mọi người xem danh sách tag
+    filter_backends = [SearchFilter]
+    search_fields = ['name']
 
-    def get_view_name(self):
-        return "Danh sách Tag"
-
-
-
-
-
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update']:
+            return [perms.IsAdminOrOrganizer()]
+        elif self.action == 'destroy':
+            return [perms.IsAdminUser()]
+        return [permissions.AllowAny()]
 
 # Đặt vé và xem vé
 import qrcode
@@ -398,18 +506,105 @@ class PaymentViewSet(viewsets.ViewSet, generics.CreateAPIView):
 class NotificationViewSet(viewsets.ViewSet, generics.ListAPIView):
     queryset = Notification.objects.all()
     serializer_class = NotificationSerializer
-    permission_classes = [permissions.IsAuthenticated]  # Chỉ người dùng đã đăng nhập mới xem thông báo
+    pagination_class = ItemPaginator
 
+    def get_permissions(self):
+        if self.action == 'my_notifications':
+            permission_classes = [permissions.IsAuthenticated]
+        elif self.action == 'event_notifications':
+            permission_classes = [permissions.AllowAny]
+        elif self.action == 'create_notification':
+            permission_classes = [perms.IsEventOwnerOrAdmin]
+        else:
+            permission_classes = [perms.IsEventOwnerOrAdmin]
+        return [permission() for permission in permission_classes]
+
+    # Ghi đè lại để tránh sử dụng queryset mặc định trong ListAPIView 
+    # → nhằm ép buộc các custom action sử dụng filter riêng theo ngữ cảnh.
+    # Tránh rò rỉ toàn bộ danh sách thông báo nếu ai đó vô tình truy cập GET /notification/.  
     def get_queryset(self):
-        """Trả về thông báo liên quan đến các sự kiện mà người dùng có vé tham gia."""
-        user = self.request.user
-        # Lấy danh sách các sự kiện mà người dùng có vé
-        events = Event.objects.filter(tickets__user=user).distinct()
-        # Trả về thông báo liên quan đến các sự kiện đó
-        return Notification.objects.filter(event__in=events)
+        return Notification.objects.none()
+    
+    # lazy loading / infinite scroll
 
-    def get_view_name(self):
-        return "Thông báo và nhắc nhở"
+    # Backend (API) vẫn phân trang bình thường (?page=1, ?page=2, ...)
+    # Frontend (Vue/React/Next.js...) sẽ:
+    # Gọi GET /api/my-notifications/?page=1 khi vừa load
+    # Khi kéo xuống gần cuối danh sách → gọi GET /api/my-notifications/?page=2 để load tiếp
+    # Append (nối thêm) vào danh sách đang hiển thị
+
+
+    @action(detail=False, methods=['get'], url_path='event-notifications')
+    def event_notifications(self, request):
+        event_id = request.query_params.get('event_id')
+        if not event_id:
+            return Response({"error": "event_id query parameter is required."}, status=status.HTTP_400_BAD_REQUEST)
+        notifications = Notification.objects.filter(event_id=event_id)
+        page = self.paginate_queryset(notifications)
+        serializer = self.get_serializer(page or notifications, many=True)
+        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+    @action(detail=False, methods=['post'], url_path='create-notification')
+    def create_notification(self, request):
+        event_id = request.data.get('event_id')
+        title = request.data.get('title')
+        message = request.data.get('message')
+        notification_type = request.data.get('notification_type', 'reminder')
+
+        if not (request.user.role in ['admin', 'organizer']):
+            return Response({"error": "Không có quyền truy cập."}, status=status.HTTP_403_FORBIDDEN)
+
+        event = None
+        if event_id:
+            try:
+                event = Event.objects.get(id=event_id)
+            except Event.DoesNotExist:
+                return Response({"error": "Sự kiện không tồn tại."}, status=status.HTTP_404_NOT_FOUND)
+
+        notification = Notification(
+            event=event,
+            notification_type=notification_type,
+            title=title,
+            message=message,
+            is_read=False
+        )
+        notification.save()
+
+        # Gửi email cho tất cả người dùng có vé của sự kiện
+        # if event:
+        #     ticket_owners = User.objects.filter(tickets__event=event).distinct()
+        #     recipient_emails = [user.email for user in ticket_owners if user.email]
+        #     if recipient_emails:
+        #         send_mail(
+        #             subject=title,
+        #             message=message,
+        #             from_email=settings.EMAIL_HOST_USER,
+        #             recipient_list=recipient_emails,
+        #             fail_silently=True
+        #         )
+        # chưa có chức năng gửi email cho người dùng có vé của sự kiện
+
+        return Response({
+            "message": "Thông báo đã được tạo và email đã được gửi.",
+            "notification": serializers.NotificationSerializer(notification).data
+        }, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['post'], url_path='mark-as-read')
+    def mark_as_read(self, request, pk=None):
+        try:
+            notification = self.get_object()
+            user_notification, created = UserNotification.objects.get_or_create(
+                user=request.user, notification=notification
+            )
+            user_notification.is_read = True
+            user_notification.read_at = timezone.now()
+            user_notification.save()
+            return Response({'message': 'Thông báo đã được đánh dấu là đã đọc.'})
+        except Notification.DoesNotExist:
+            return Response({'error': 'Không tìm thấy thông báo.'}, status=404)
+
+
+
 
 # Đánh giá sự kiện
 # Cho phép người dùng đánh giá và viết nhận xét về sự kiện
@@ -434,8 +629,9 @@ class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Updat
 
 # Thống kê và báo cáo
 # Hiển thị thống kê sự kiện của organizer, bao gồm số vé đã bán, doanh thu, và số lượt xem
-class OrganizerEventStatisticsView(APIView):
+class EventTrendingLogView(viewsets.ViewSet, generics.RetrieveAPIView):
     permission_classes = [permissions.IsAuthenticated]  # Chỉ người dùng đã đăng nhập mới xem thống kê
+    serializer_class = EventTrendingLogSerializer
 
     def get(self, request):
         organizer = request.user  # Lấy organizer từ người dùng đăng nhập
@@ -483,7 +679,7 @@ class ChatMessageViewSet(viewsets.ViewSet, generics.ListCreateAPIView):
 # Hiển thị danh sách mã giảm giá đang hoạt động
 class DiscountCodeViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView):
     queryset = DiscountCode.objects.filter(is_active=True)
-    serializer_class = serializers.DiscountCodeSerializer
+    serializer_class = DiscountCodeSerializer
     pagination_class = ItemPaginator
 
     def get_permissions(self):
@@ -492,26 +688,20 @@ class DiscountCodeViewSet(viewsets.ViewSet, generics.ListAPIView, generics.Creat
         return [permissions.IsAuthenticated()]
     
 # View cho EventTrendingLog
+from rest_framework import mixins, viewsets, permissions
+from .perms import IsAdminUser, IsOrganizerOwner
+
 class EventTrendingLogViewSet(mixins.ListModelMixin,
                              mixins.RetrieveModelMixin,
-                             mixins.CreateModelMixin,
-                             mixins.UpdateModelMixin,
-                             mixins.DestroyModelMixin,
-                             viewsets.ViewSet):
-    queryset = EventTrendingLog.objects.all()
+                             viewsets.GenericViewSet):
+    queryset = EventTrendingLog.objects.all().order_by('trending_score')
     serializer_class = EventTrendingLogSerializer
-    permission_classes = [permissions.IsAuthenticated]  # Chỉ người dùng đã đăng nhập mới được truy cập
+    permission_classes = [permissions.IsAuthenticated, IsAdminUser | IsOrganizerOwner]
 
     def get_queryset(self):
-        """Chỉ trả về các log liên quan đến sự kiện của organizer hiện tại."""
-        if self.request.user.role == 'organizer':
-            return EventTrendingLog.objects.filter(event__organizer=self.request.user)
+        user = self.request.user
+        if user.role == 'admin':
+            return self.queryset.order_by('trending_score')
+        elif user.role == 'organizer':
+            return self.queryset.filter(event__organizer=user).order_by('trending_score')
         return EventTrendingLog.objects.none()
-
-    def perform_update(self, serializer):
-        """Cập nhật log sự kiện."""
-        serializer.save()
-
-    def perform_create(self, serializer):
-        """Tạo log sự kiện mới."""
-        serializer.save()
