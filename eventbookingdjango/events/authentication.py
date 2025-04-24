@@ -16,6 +16,10 @@ class EmailOrUsernameModelBackend(ModelBackend):
         if not user:
             return None
 
+        # Kiểm tra is_active trước khi xác thực
+        if not user.is_active:
+            return None
+
         if user.check_password(password) and self.user_can_authenticate(user):
             return user
         return None

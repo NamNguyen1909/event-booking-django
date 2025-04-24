@@ -24,30 +24,96 @@ from events.serializers import (
     EventStatisticSerializer, EventTrendingLogSerializer
 )
 from events.paginators import ItemPaginator
+from rest_framework import serializers
 
 
 
-# Đăng ký tài khoản
 class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
-    queryset = User.objects.filter(is_active=True)
     serializer_class = UserSerializer
-    permission_classes = [permissions.AllowAny]  # Cho phép mọi người đăng ký tài khoản
-    parser_classes = [parsers.MultiPartParser, parsers.FormParser,JSONParser]  # Cho phép upload file (avatar)
+    pagination_class = ItemPaginator
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ['username', 'email', 'phone']
+    ordering_fields = ['created_at', 'username']
 
-    def get_view_name(self):
-        return "Đăng ký tài khoản"
-    
-    @action(methods=['get','patch'],url_path='current-user',detail=False,permission_classes = [permissions.IsAuthenticated]) #detail false để không lộ id => security | để permission_classes p73 đây thì chỉ có cái này cần chứng thực
-    def get_current_user(self,request):
-        u=request.user
-        if request.method.__eq__('PATCH'): #cập nhật
-            for k,v in request.data.items():
-                if k in ['first_name','last_name']:
-                    setattr(u,k,v) # u.k=v
-                elif k.__eq__('password'):
-                    u.set_password(v)
-            u.save()
-        return Response(UserSerializer(u).data)
+    def get_permissions(self):
+        if self.action in ['get_current_user', 'tickets', 'payments', 'notifications', 'sent_messages', 'profile', 'deactivate']:
+            return [permissions.IsAuthenticated()]
+        elif self.action in ['create']:
+            return [permissions.AllowAny()]
+
+    def create(self, request, *args, **kwargs):
+        role = request.data.get('role', 'attendee')
+        if role not in ['admin', 'organizer', 'attendee']:
+            return Response({"error": "Vai trò không hợp lệ."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(methods=['get', 'patch'], detail=False, url_path='current-user')
+    def get_current_user(self, request):
+        user = request.user
+        if request.method == 'PATCH':
+            serializer = self.get_serializer(user, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(self.get_serializer(user).data)
+        else:
+            serializer = UserDetailSerializer(user)
+            return Response(serializer.data)
+
+    @action(methods=['post'], detail=False, url_path='deactivate')
+    def deactivate(self, request):
+        user = request.user
+        user.is_active = False
+        user.save()
+        return Response({"detail": "Tài khoản đã bị xóa!."}, status=status.HTTP_200_OK)
+
+    @action(methods=['get'], detail=False, url_path='tickets')
+    def get_tickets(self, request):
+        user = request.user
+
+        tickets = user.tickets.all().select_related('event')
+        page = self.paginate_queryset(tickets)
+        serializer = serializers.TicketSerializer(page or tickets, many=True)
+        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+    @action(methods=['get'], detail=False, url_path='payments')
+    def get_payments(self, request):
+        user = request.user
+
+        payments = user.payments.all().select_related('discount_code')
+        page = self.paginate_queryset(payments)
+        serializer = serializers.PaymentSerializer(page or payments, many=True)
+        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+    # @action(methods=['get'], detail=False, url_path='reviews')
+    # def get_reviews(self, request):
+    #     user = request.user
+    #     reviews = user.event_reviews.all().select_related('event')
+    #     page = self.paginate_queryset(reviews)
+    #     serializer = serializers.ReviewSerializer(page or reviews, many=True)
+    #     return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+    @action(methods=['get'], detail=False, url_path='notifications')
+    def get_notifications(self, request):
+        user = request.user
+
+        # Lọc thông báo dựa trên vé của người dùng
+        tickets = Ticket.objects.filter(user=user).values('event_id')
+        notifications = Notification.objects.filter(event__id__in=tickets).select_related('event')
+        page = self.paginate_queryset(notifications)
+        serializer = serializers.NotificationSerializer(page or notifications, many=True)
+        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
+
+    @action(methods=['get'], detail=False, url_path='sent-messages')
+    def get_sent_messages(self, request):
+        user = request.user
+
+        messages = user.sent_messages.all().select_related('event', 'receiver')
+        page = self.paginate_queryset(messages)
+        serializer = serializers.ChatMessageSerializer(page or messages, many=True)
+        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
 
 # ViewSet cho Event
 #Xem sự kiện
@@ -210,20 +276,10 @@ class TagViewSet(viewsets.ViewSet, generics.ListAPIView):
     def get_view_name(self):
         return "Danh sách Tag"
 
-# Xem và cập nhật profile người dùng, bao gồm thay đổi password
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.views import APIView
-from rest_framework import status
 
-from rest_framework import mixins, viewsets
-from rest_framework.permissions import IsAuthenticated
 
-class UserProfileViewSet(viewsets.ViewSet,generics.RetrieveAPIView):
-    serializer_class = UserDetailSerializer
-    permission_classes = [IsAuthenticated]
 
-    def get_object(self):
-        return self.request.user
+
 
 # Đặt vé và xem vé
 import qrcode
@@ -425,13 +481,15 @@ class ChatMessageViewSet(viewsets.ViewSet, generics.ListCreateAPIView):
 
 # Mã giảm giá
 # Hiển thị danh sách mã giảm giá đang hoạt động
-class DiscountCodeViewSet(viewsets.ViewSet, generics.ListAPIView):
+class DiscountCodeViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView):
     queryset = DiscountCode.objects.filter(is_active=True)
-    serializer_class = DiscountCodeSerializer
-    permission_classes = [permissions.IsAuthenticated]  # Chỉ người dùng đã đăng nhập mới xem mã giảm giá
+    serializer_class = serializers.DiscountCodeSerializer
+    pagination_class = ItemPaginator
 
-    def get_view_name(self):
-        return "Danh sách mã giảm giá"
+    def get_permissions(self):
+        if self.action == 'create':
+            return [perms.IsAdminOrOrganizer()]
+        return [permissions.IsAuthenticated()]
     
 # View cho EventTrendingLog
 class EventTrendingLogViewSet(mixins.ListModelMixin,
