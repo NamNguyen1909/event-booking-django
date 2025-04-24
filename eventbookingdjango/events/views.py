@@ -629,21 +629,26 @@ class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Updat
 
 # Thống kê và báo cáo
 # Hiển thị thống kê sự kiện của organizer, bao gồm số vé đã bán, doanh thu, và số lượt xem
-class EventTrendingLogView(viewsets.ViewSet, generics.RetrieveAPIView):
-    permission_classes = [permissions.IsAuthenticated]  # Chỉ người dùng đã đăng nhập mới xem thống kê
+class EventStatisticView(viewsets.ViewSet, generics.RetrieveAPIView):
+    permission_classes = [perms.IsAdminOrOrganizer]  # Only authenticated users can view statistics
     serializer_class = EventTrendingLogSerializer
 
     def get(self, request):
-        organizer = request.user  # Lấy organizer từ người dùng đăng nhập
-        events = Event.objects.filter(organizer=organizer)
+        user = request.user
+        if user.role == 'admin':
+            events = Event.objects.all()
+        elif user.role == 'organizer':
+            events = Event.objects.filter(organizer=user)
+        else:
+            return Response({"error": "You do not have permission to view this."}, status=403)
 
         statistics = []
         for event in events:
-            total_tickets_sold = Ticket.objects.filter(event=event, is_paid=True).count()
-            total_revenue = Ticket.objects.filter(event=event, is_paid=True).aggregate(
-                total=Sum('event__ticket_price')
-            )['total'] or 0
+            total_tickets_sold = event.sold_tickets
+
             trending_log = EventTrendingLog.objects.filter(event=event).first()
+
+            total_revenue = trending_log.total_revenue if trending_log else 0
             view_count = trending_log.view_count if trending_log else 0
 
             statistics.append({
@@ -689,19 +694,23 @@ class DiscountCodeViewSet(viewsets.ViewSet, generics.ListAPIView, generics.Creat
     
 # View cho EventTrendingLog
 from rest_framework import mixins, viewsets, permissions
-from .perms import IsAdminUser, IsOrganizerOwner
+
 
 class EventTrendingLogViewSet(mixins.ListModelMixin,
                              mixins.RetrieveModelMixin,
                              viewsets.GenericViewSet):
-    queryset = EventTrendingLog.objects.all().order_by('trending_score')
+    queryset = EventTrendingLog.objects.filter(event__is_active=True)
     serializer_class = EventTrendingLogSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdminUser | IsOrganizerOwner]
+    pagination_class = ItemPaginator
 
-    def get_queryset(self):
-        user = self.request.user
-        if user.role == 'admin':
-            return self.queryset.order_by('trending_score')
-        elif user.role == 'organizer':
-            return self.queryset.filter(event__organizer=user).order_by('trending_score')
-        return EventTrendingLog.objects.none()
+    permission_classes = [permissions.AllowAny]
+
+    # GET /event-trending-logs/:id/   |||| Trả về chi tiết Event khi click vào
+    def retrieve(self, request, *args, **kwargs):
+        trending_log = self.get_object()
+        event = trending_log.event
+        serializer = EventDetailSerializer(event)
+        return Response(serializer.data)
+
+
+
