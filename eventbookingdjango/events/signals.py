@@ -79,7 +79,7 @@ def update_sold_tickets_on_save(sender, instance, created, **kwargs):
         # Update EventTrendingLog total_revenue and trending_score
         trending_log, _ = EventTrendingLog.objects.get_or_create(event=instance.event)
         trending_log.total_revenue = trending_log.total_revenue + instance.event.ticket_price
-        trending_log.calculate_trending_score()
+        trending_log.calculate_score()
     elif not created:
         # Nếu là update và is_paid vừa chuyển từ False -> True
         old = Ticket.objects.get(pk=instance.pk)
@@ -90,7 +90,7 @@ def update_sold_tickets_on_save(sender, instance, created, **kwargs):
             # Update EventTrendingLog total_revenue and trending_score
             trending_log, _ = EventTrendingLog.objects.get_or_create(event=instance.event)
             trending_log.total_revenue = trending_log.total_revenue + instance.event.ticket_price
-            trending_log.calculate_trending_score()
+            trending_log.calculate_score()
 
 
 # Signal để cập nhật sold_tickets của Event khi Ticket bị xóa

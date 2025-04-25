@@ -402,12 +402,14 @@ class EventTrendingLog(models.Model):
     view_count = models.IntegerField(default=0)
     total_revenue = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     trending_score = models.DecimalField(max_digits=10, decimal_places=4, default=0)
+    interest_score = models.DecimalField(max_digits=10, decimal_places=4, default=0)
     last_updated = models.DateTimeField(auto_now=True)
 
-    def calculate_trending_score(self):
+    def calculate_score(self):
         today = date.today()
         sold_tickets = self.event.sold_tickets
         total_tickets = self.event.total_tickets
+        review_count = self.event.reviews.count()
         sales_start_date = self.event.created_at.date() if self.event.created_at else today
 
         # Tỷ lệ vé đã bán
@@ -417,14 +419,24 @@ class EventTrendingLog(models.Model):
         velocity = sold_tickets / days_since_sales_start
         views = self.view_count
 
-        # Điểm trending (giả định đã chuẩn hóa các giá trị)
-        score = (
+        # Trending score
+        trending_score = (
             (sold_ratio * 0.5) +
             (velocity * 0.3) +
             (math.log(views + 1) * 0.2)
         )
-        self.trending_score = round(score, 4)
-        self.save(update_fields=['trending_score'])
+        self.trending_score = round(trending_score, 4)
+
+        # Interest score – có thể điều chỉnh trọng số tùy mục tiêu
+        interest_score = (
+            (self.trending_score * 0.5) +
+            (sold_tickets * 0.3) +
+            (review_count * 0.2)
+        )
+        self.interest_score = round(interest_score, 4)
+
+        self.save(update_fields=['trending_score', 'interest_score'])
+
 
     class Meta:
         indexes = [

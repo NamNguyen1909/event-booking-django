@@ -292,7 +292,7 @@ class EventTrendingLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = EventTrendingLog
-        fields = ['id', 'event', 'event_title', 'event_poster', 'view_count', 'total_revenue', 'trending_score', 'last_updated']
+        fields = ['id', 'event', 'event_title', 'event_poster', 'view_count', 'total_revenue', 'trending_score', 'interest_score', 'last_updated']
         read_only_fields = ['id', 'event_title', 'last_updated']
 
 
