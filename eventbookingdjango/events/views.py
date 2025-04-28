@@ -379,7 +379,7 @@ class PaymentViewSet(viewsets.ViewSet, generics.CreateAPIView):
 # Hiển thị danh sách mã giảm giá đang hoạt động
 class DiscountCodeViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView):
     queryset = DiscountCode.objects.filter(is_active=True)
-    serializer_class = serializers.DiscountCodeSerializer
+    serializer_class = DiscountCodeSerializer
     pagination_class = ItemPaginator
 
     def get_permissions(self):
@@ -493,7 +493,7 @@ class NotificationViewSet(viewsets.ViewSet, generics.ListAPIView):
 # ViewSet cho ChatMessage
 class ChatMessageViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView):
     queryset = ChatMessage.objects.all()
-    serializer_class = serializers.ChatMessageSerializer
+    serializer_class = ChatMessageSerializer
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = ItemPaginator
 
@@ -567,38 +567,38 @@ class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Updat
 
 # Thống kê và báo cáo
 # Hiển thị thống kê sự kiện của organizer, bao gồm số vé đã bán, doanh thu, và số lượt xem
-class EventStatisticView(viewsets.ViewSet, generics.RetrieveAPIView):
-    permission_classes = [perms.IsAdminOrOrganizer]  # Only authenticated users can view statistics
-    serializer_class = EventTrendingLogSerializer
+# class EventStatisticView(viewsets.ViewSet, generics.RetrieveAPIView):
+#     permission_classes = [perms.IsAdminOrOrganizer]  # Only authenticated users can view statistics
+#     serializer_class = EventTrendingLogSerializer
 
-    def get(self, request):
-        user = request.user
-        if user.role == 'admin':
-            events = Event.objects.all()
-        elif user.role == 'organizer':
-            events = Event.objects.filter(organizer=user)
-        else:
-            return Response({"error": "You do not have permission to view this."}, status=403)
+#     def get(self, request):
+#         user = request.user
+#         if user.role == 'admin':
+#             events = Event.objects.all()
+#         elif user.role == 'organizer':
+#             events = Event.objects.filter(organizer=user)
+#         else:
+#             return Response({"error": "You do not have permission to view this."}, status=403)
 
-        statistics = []
-        for event in events:
-            total_tickets_sold = event.sold_tickets
+#         statistics = []
+#         for event in events:
+#             total_tickets_sold = event.sold_tickets
 
-            trending_log = EventTrendingLog.objects.filter(event=event).first()
+#             trending_log = EventTrendingLog.objects.filter(event=event).first()
 
-            total_revenue = trending_log.total_revenue if trending_log else 0
-            view_count = trending_log.view_count if trending_log else 0
+#             total_revenue = trending_log.total_revenue if trending_log else 0
+#             view_count = trending_log.view_count if trending_log else 0
 
-            statistics.append({
-                'id': event.id,
-                'title': event.title,
-                'total_tickets_sold': total_tickets_sold,
-                'total_revenue': total_revenue,
-                'view_count': view_count,
-            })
+#             statistics.append({
+#                 'id': event.id,
+#                 'title': event.title,
+#                 'total_tickets_sold': total_tickets_sold,
+#                 'total_revenue': total_revenue,
+#                 'view_count': view_count,
+#             })
 
-        serializer = EventStatisticSerializer(statistics, many=True)
-        return Response(serializer.data)
+#         serializer = EventStatisticSerializer(statistics, many=True)
+#         return Response(serializer.data)
 
     
 # View cho EventTrendingLog

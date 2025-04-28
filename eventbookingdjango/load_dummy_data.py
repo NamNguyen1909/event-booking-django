@@ -308,16 +308,7 @@ def load_dummy_data():
             notification_type=notif_data.get('notification_type', 'reminder')
         )
         notification.save()
-        # Tạo UserNotification cho tất cả người dùng có vé của sự kiện
-        if event:
-            ticket_owners = Ticket.objects.filter(event=event).values_list('user', flat=True).distinct()
-            for user_id in ticket_owners:
-                user = User.objects.get(id=user_id)
-                UserNotification.objects.create(
-                    user=user,
-                    notification=notification,
-                    is_read=False
-                )
+        # Đã bỏ tạo UserNotification thủ công để tránh lỗi trùng lặp do signal tự tạo
         print(f"Đã tạo notification cho event {notif_data.get('event')}")
 
     # 9. Nhập dữ liệu cho ChatMessage
