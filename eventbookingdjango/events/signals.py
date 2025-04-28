@@ -11,8 +11,11 @@ from django.utils import timezone
 
 # Tự động tạo thông báo khi sự kiện được cập nhật
 @receiver(post_save, sender=Event)
-def create_notification_for_event_update(sender, instance, created, **kwargs):
+def create_notification_for_event_update(sender, instance, created, update_fields=None, **kwargs):
     """Tạo thông báo khi sự kiện được cập nhật."""
+    # Bỏ qua nếu chỉ cập nhật trường sold_tickets
+    if not created and update_fields == {'sold_tickets'}:
+        return
     if not created:  # Chỉ chạy khi sự kiện được cập nhật
         with transaction.atomic():
             # Tạo một thông báo duy nhất cho sự kiện
