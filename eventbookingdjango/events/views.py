@@ -119,110 +119,6 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView):
         page = self.paginate_queryset(messages)
         serializer = serializers.ChatMessageSerializer(page or messages, many=True)
         return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
-    serializer_class = UserSerializer
-    pagination_class = ItemPaginator
-    filter_backends = [SearchFilter, OrderingFilter]
-    search_fields = ['username', 'email', 'phone']
-    ordering_fields = ['created_at', 'username']
-
-    def get_permissions(self):
-        if self.action in ['get_current_user', 'tickets', 'payments', 'notifications', 'sent_messages', 'profile', 'deactivate']:
-            return [permissions.IsAuthenticated()]
-        elif self.action in ['create']:
-            return [permissions.AllowAny()]
-
-    def create(self, request, *args, **kwargs):
-        role = request.data.get('role', 'attendee')
-        if role not in ['admin', 'organizer', 'attendee']:
-            return Response({"error": "Vai trò không hợp lệ."}, status=status.HTTP_400_BAD_REQUEST)
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-    @action(methods=['get', 'patch'], detail=False, url_path='current-user')
-    def get_current_user(self, request):
-        user = request.user
-        if request.method == 'PATCH':
-            serializer = self.get_serializer(user, data=request.data, partial=True)
-            serializer.is_valid(raise_exception=True)
-            serializer.save()
-            return Response(self.get_serializer(user).data)
-        else:
-            serializer = UserDetailSerializer(user)
-            return Response(serializer.data)
-
-    @action(methods=['post'], detail=False, url_path='deactivate')
-    def deactivate(self, request):
-        user = request.user
-        user.is_active = False
-        user.save()
-        return Response({"detail": "Tài khoản đã bị xóa!."}, status=status.HTTP_200_OK)
-
-    @action(methods=['get'], detail=False, url_path='tickets')
-    def get_tickets(self, request):
-        user = request.user
-
-        tickets = user.tickets.all().select_related('event')
-        page = self.paginate_queryset(tickets)
-        serializer = serializers.TicketSerializer(page or tickets, many=True)
-        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
-
-    @action(methods=['get'], detail=False, url_path='payments')
-    def get_payments(self, request):
-        user = request.user
-
-        payments = user.payments.all().select_related('discount_code')
-        page = self.paginate_queryset(payments)
-        serializer = serializers.PaymentSerializer(page or payments, many=True)
-        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
-
-    # @action(methods=['get'], detail=False, url_path='reviews')
-    # def get_reviews(self, request):
-    #     user = request.user
-    #     reviews = user.event_reviews.all().select_related('event')
-    #     page = self.paginate_queryset(reviews)
-    #     serializer = serializers.ReviewSerializer(page or reviews, many=True)
-    #     return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
-
-    # @action(methods=['get'], detail=False, url_path='notifications')
-    # def get_notifications(self, request):
-    #     user = request.user
-
-    #     # Lọc thông báo dựa trên vé của người dùng
-    #     tickets = Ticket.objects.filter(user=user).values('event_id')
-    #     notifications = Notification.objects.filter(event__id__in=tickets).select_related('event')
-    #     page = self.paginate_queryset(notifications)
-    #     serializer = serializers.NotificationSerializer(page or notifications, many=True)
-    #     return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
-
-
-
-
-    # lazy loading / infinite scroll
-
-    # Backend (API) vẫn phân trang bình thường (?page=1, ?page=2, ...)
-    # Frontend (Vue/React/Next.js...) sẽ:
-    # Gọi GET /api/my-notifications/?page=1 khi vừa load
-    # Khi kéo xuống gần cuối danh sách → gọi GET /api/my-notifications/?page=2 để load tiếp
-    # Append (nối thêm) vào danh sách đang hiển thị
-    @action(detail=False, methods=['get'], url_path='my-notifications')
-    def my_notifications(self, request):
-        user = request.user
-        events = Event.objects.filter(tickets__user=user, tickets__is_checked_in=False).distinct()
-        notifications = Notification.objects.filter(event__in=events)
-        page = self.paginate_queryset(notifications)
-        serializer = serializers.NotificationSerializer(page or notifications, many=True)
-        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
-
-    @action(methods=['get'], detail=False, url_path='sent-messages')
-    def get_sent_messages(self, request):
-        user = request.user
-
-        messages = user.sent_messages.all().select_related('event', 'receiver')
-        page = self.paginate_queryset(messages)
-        serializer = serializers.ChatMessageSerializer(page or messages, many=True)
-        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
 
 # ViewSet cho Event
 #Xem sự kiện
@@ -249,9 +145,6 @@ class EventViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIV
             return [perms.IsOrganizerUser()]
         elif self.action in ['update', 'partial_update', 'my_events']:
             return [perms.IsOrganizerOwner()]
-        elif self.action == 'manage_reviews':
-            # GET cho phép tất cả, POST yêu cầu xác thực sẽ kiểm tra trong view
-            return [permissions.AllowAny()]
         return [perms.IsAdminOrOrganizer(), perms.IsEventOrganizer()]
 
     def create(self, request, *args, **kwargs):
@@ -296,26 +189,6 @@ class EventViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIV
         tickets = event.tickets.filter(is_paid=True).select_related('user')
         page = self.paginate_queryset(tickets)
         serializer = TicketSerializer(page or tickets, many=True)
-        return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
-
-    @action(methods=['get', 'post'], detail=True, url_path='reviews')
-    def manage_reviews(self, request, pk):
-        event = self.get_object()
-        if request.method == 'POST':
-            if not request.user.is_authenticated:
-                return Response({"detail": "Yêu cầu xác thực."}, status=status.HTTP_401_UNAUTHORIZED)
-            serializer = ReviewSerializer(data={
-                'user': request.user.pk,
-                'event': pk,
-                'rating': request.data.get('rating'),
-                'comment': request.data.get('comment')
-            })
-            serializer.is_valid(raise_exception=True)
-            review = serializer.save()
-            return Response(ReviewSerializer(review).data, status=status.HTTP_201_CREATED)
-        reviews = event.reviews.all().select_related('user')
-        page = self.paginate_queryset(reviews)
-        serializer = ReviewSerializer(page or reviews, many=True)
         return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
 
     @action(methods=['get'], detail=True, url_path='chat-messages')
@@ -501,6 +374,20 @@ class PaymentViewSet(viewsets.ViewSet, generics.CreateAPIView):
         return self.queryset.filter(user=user)
 
 
+# ViewSet cho DiscountCode
+# Mã giảm giá
+# Hiển thị danh sách mã giảm giá đang hoạt động
+class DiscountCodeViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView):
+    queryset = DiscountCode.objects.filter(is_active=True)
+    serializer_class = serializers.DiscountCodeSerializer
+    pagination_class = ItemPaginator
+
+    def get_permissions(self):
+        if self.action == 'create':
+            return [perms.IsAdminOrOrganizer()]
+        return [permissions.IsAuthenticated()]
+
+
 # Thông báo và nhắc nhở
 # Hiển thị thông báo và nhắc nhở cho người dùng hiện tại
 class NotificationViewSet(viewsets.ViewSet, generics.ListAPIView):
@@ -603,29 +490,80 @@ class NotificationViewSet(viewsets.ViewSet, generics.ListAPIView):
         except Notification.DoesNotExist:
             return Response({'error': 'Không tìm thấy thông báo.'}, status=404)
 
+# ViewSet cho ChatMessage
+class ChatMessageViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView):
+    queryset = ChatMessage.objects.all()
+    serializer_class = serializers.ChatMessageSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = ItemPaginator
 
+    def get_permissions(self):
+        if self.action in ['retrieve', 'update', 'partial_update', 'destroy']:
+            return [perms.IsChatMessageSender()]
+        return [permissions.IsAuthenticated()]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data={
+            'sender': request.user.pk,
+            'event': request.data.get('event'),
+            'receiver': request.data.get('receiver'),
+            'message': request.data.get('message'),
+            'is_from_organizer': request.user.role == 'organizer' and request.data.get('is_from_organizer', False)
+        })
+        serializer.is_valid(raise_exception=True)
+        message = serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def get_queryset(self):
+        event_id = self.request.query_params.get('event')
+        if event_id:
+            return self.queryset.filter(event_id=event_id).filter(
+                Q(receiver=self.request.user) | Q(sender=self.request.user)
+            ).select_related('sender', 'receiver')
+        return self.queryset.filter(
+            Q(receiver=self.request.user) | Q(sender=self.request.user)
+        ).select_related('sender', 'receiver')
 
 
 # Đánh giá sự kiện
-# Cho phép người dùng đánh giá và viết nhận xét về sự kiện
-class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView,generics.DestroyAPIView):
+
+# Override get_permissions để phân quyền: create yêu cầu xác thực, update/partial_update/destroy yêu cầu ReviewOwner, 
+# list cho phép tất cả.
+# Override get_queryset để lọc review theo event_id và ưu tiên review của user hiện tại đứng đầu.
+# Override perform_create để kiểm tra user chưa review event mới cho tạo review, nếu đã có thì báo lỗi. 
+# Bo vệ quyền sửa/xóa review chỉ cho chủ sở hữu, và đảm bảo mỗi user chỉ được review 1 event 1 lần.
+class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView, generics.DestroyAPIView):
     queryset = Review.objects.all()
     serializer_class = ReviewSerializer
-    permission_classes = [perms.ReviewOwner]  # Chỉ người dùng đã đăng nhập mới được sửa review
+    pagination_class = ItemPaginator
+
+    def get_permissions(self):
+        if self.action in ['update', 'partial_update', 'destroy']:
+            return [perms.ReviewOwner()]
+        elif self.action == 'create':
+            return [permissions.IsAuthenticated()]
+        return [permissions.AllowAny()]
 
     def get_queryset(self):
-        """Trả về danh sách review cho sự kiện."""
+        """Trả về danh sách review cho sự kiện, ưu tiên review của user hiện tại đứng đầu."""
         event_id = self.request.query_params.get('event_id')
+        queryset = Review.objects.all()
         if event_id:
-            return Review.objects.filter(event_id=event_id)
-        return Review.objects.all()
+            queryset = queryset.filter(event_id=event_id)
+        user = self.request.user
+        if user.is_authenticated:
+            # Sắp xếp sao cho review của user hiện tại đứng đầu
+            queryset = sorted(queryset, key=lambda r: r.user != user)
+        return queryset
 
     def perform_create(self, serializer):
-        """Gán người dùng hiện tại khi tạo review."""
-        serializer.save(user=self.request.user)
+        """Gán người dùng hiện tại khi tạo review, kiểm tra user chưa review event."""
+        user = self.request.user
+        event = serializer.validated_data.get('event')
+        if Review.objects.filter(user=user, event=event).exists():
+            raise serializers.ValidationError("Bạn đã có đánh giá cho sự kiện này.")
+        serializer.save(user=user)
 
-    def get_view_name(self):
-        return "Đánh giá sự kiện"
 
 # Thống kê và báo cáo
 # Hiển thị thống kê sự kiện của organizer, bao gồm số vé đã bán, doanh thu, và số lượt xem
@@ -662,35 +600,6 @@ class EventStatisticView(viewsets.ViewSet, generics.RetrieveAPIView):
         serializer = EventStatisticSerializer(statistics, many=True)
         return Response(serializer.data)
 
-# Chat real-time
-# Cho phép người dùng gửi và nhận tin nhắn liên quan đến sự kiện
-class ChatMessageViewSet(viewsets.ViewSet, generics.ListCreateAPIView):
-    queryset = ChatMessage.objects.all()
-    serializer_class = ChatMessageSerializer
-    permission_classes = [permissions.IsAuthenticated]  # Chỉ người dùng đã đăng nhập mới được chat
-
-    def perform_create(self, serializer):
-        """Gán người gửi là người dùng hiện tại."""
-        serializer.save(sender=self.request.user)
-
-    def get_queryset(self):
-        """Trả về tin nhắn liên quan đến sự kiện của người dùng."""
-        return ChatMessage.objects.filter(event__organizer=self.request.user)
-
-    def get_view_name(self):
-        return "Chat real-time"
-
-# Mã giảm giá
-# Hiển thị danh sách mã giảm giá đang hoạt động
-class DiscountCodeViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView):
-    queryset = DiscountCode.objects.filter(is_active=True)
-    serializer_class = DiscountCodeSerializer
-    pagination_class = ItemPaginator
-
-    def get_permissions(self):
-        if self.action == 'create':
-            return [perms.IsAdminOrOrganizer()]
-        return [permissions.IsAuthenticated()]
     
 # View cho EventTrendingLog
 from rest_framework import mixins, viewsets, permissions
