@@ -2,15 +2,21 @@ import os
 import json
 import django
 from datetime import datetime
-from django.utils.timezone import make_aware
+import django.utils.timezone as timezone
 from django.db import transaction
+import uuid
+import qrcode
+import io
+import base64
+from cloudinary.uploader import upload
+from decimal import Decimal
 
 # Thiết lập môi trường Django
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'eventbookingdjango.settings')
 django.setup()
 
-# Import các model từ app events
-from events.models import User, Event, Tag, Ticket, Payment, Review, DiscountCode, Notification, ChatMessage, EventTrendingLog
+# Import các model từ app bem
+from events.models import User, Event, Tag, Ticket, Payment, Review, DiscountCode, Notification, ChatMessage, EventTrendingLog, UserNotification
 
 
 def load_dummy_data():
@@ -29,7 +35,6 @@ def load_dummy_data():
             email=user_data['email'],
             role=user_data['role'],
             phone=user_data.get('phone', None),
-            total_spent=user_data.get('total_spent', 0),
             is_active=user_data.get('is_active', True),
             is_staff=user_data.get('is_staff', False),
             is_superuser=user_data.get('is_superuser', False)
@@ -62,8 +67,8 @@ def load_dummy_data():
         except User.DoesNotExist:
             print(f"Organizer {event_data['organizer']} không tồn tại, bỏ qua event {event_data['title']}...")
             continue
-        start_time = make_aware(datetime.strptime(event_data['start_time'], '%Y-%m-%dT%H:%M:%S'))
-        end_time = make_aware(datetime.strptime(event_data['end_time'], '%Y-%m-%dT%H:%M:%S'))
+        start_time = timezone.make_aware(datetime.strptime(event_data['start_time'], '%Y-%m-%dT%H:%M:%S'))
+        end_time = timezone.make_aware(datetime.strptime(event_data['end_time'], '%Y-%m-%dT%H:%M:%S'))
         event = Event(
             title=event_data['title'],
             description=event_data['description'],
@@ -76,7 +81,7 @@ def load_dummy_data():
             organizer=organizer,
             ticket_price=event_data['ticket_price'],
             total_tickets=event_data['total_tickets'],
-            sold_tickets=event_data.get('sold_tickets', 0),
+            sold_tickets=0,  # Ban đầu chưa có vé nào được bán
             is_active=event_data.get('is_active', True)
         )
         event.save()
@@ -96,8 +101,8 @@ def load_dummy_data():
         if DiscountCode.objects.filter(code=discount_data['code']).exists():
             print(f"DiscountCode {discount_data['code']} đã tồn tại, bỏ qua...")
             continue
-        valid_from = make_aware(datetime.strptime(discount_data['valid_from'], '%Y-%m-%dT%H:%M:%S'))
-        valid_to = make_aware(datetime.strptime(discount_data['valid_to'], '%Y-%m-%dT%H:%M:%S'))
+        valid_from = timezone.make_aware(datetime.strptime(discount_data['valid_from'], '%Y-%m-%dT%H:%M:%S'))
+        valid_to = timezone.make_aware(datetime.strptime(discount_data['valid_to'], '%Y-%m-%dT%H:%M:%S'))
         discount = DiscountCode(
             code=discount_data['code'],
             discount_percentage=discount_data['discount_percentage'],
@@ -113,6 +118,7 @@ def load_dummy_data():
 
     # 5. Nhập dữ liệu cho Ticket
     print("\nĐang nhập dữ liệu cho Ticket...")
+    tickets_map = {}  # Lưu trữ vé để sử dụng trong Payment
     for ticket_data in data.get('tickets', []):
         try:
             event = Event.objects.get(title=ticket_data['event'])
@@ -120,25 +126,41 @@ def load_dummy_data():
         except (Event.DoesNotExist, User.DoesNotExist) as e:
             print(f"Event {ticket_data['event']} hoặc User {ticket_data['user']} không tồn tại, bỏ qua ticket...")
             continue
-        if event.tickets.count() >= event.total_tickets:
+        if event.tickets.filter(is_paid=True).count() >= event.total_tickets:
             print(f"Event {event.title} đã hết vé, bỏ qua ticket...")
             continue
-        if Ticket.objects.filter(qr_code=ticket_data['qr_code']).exists():
-            print(f"Ticket với qr_code {ticket_data['qr_code']} đã tồn tại, bỏ qua...")
+
+        # Tạo QR code
+        qr_code = str(uuid.uuid4())
+        qr = qrcode.QRCode(version=1, box_size=10, border=5)
+        qr.add_data(qr_code)
+        qr.make(fit=True)
+        img = qr.make_image(fill='black', back_color='white')
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        qr_code_image = buffer.getvalue()
+
+        # Tải lên Cloudinary
+        try:
+            upload_result = upload(qr_code_image, resource_type="image", folder="qr_codes")
+            qr_code_url = upload_result['secure_url']
+        except Exception as e:
+            print(f"Lỗi khi tải QR code lên Cloudinary: {e}, bỏ qua ticket...")
             continue
-        purchase_date = make_aware(datetime.strptime(ticket_data['purchase_date'], '%Y-%m-%dT%H:%M:%S')) if ticket_data.get('purchase_date') else None
-        check_in_date = make_aware(datetime.strptime(ticket_data['check_in_date'], '%Y-%m-%dT%H:%M:%S')) if ticket_data.get('check_in_date') else None
+
         ticket = Ticket(
             event=event,
             user=user,
-            qr_code=ticket_data['qr_code'],
+            qr_code=qr_code_url,
             is_paid=ticket_data.get('is_paid', False),
-            is_checked_in=ticket_data.get('is_checked_in', False),
-            purchase_date=purchase_date,
-            check_in_date=check_in_date
+            is_checked_in=ticket_data.get('is_checked_in', False)
         )
         ticket.save()
+        if ticket.is_paid:
+            event.sold_tickets += 1
+            event.save(update_fields=['sold_tickets'])
         print(f"Đã tạo ticket cho user {user.username} tại event {event.title}")
+        tickets_map[f"{event.title}_{user.username}_{ticket_data['is_paid']}_{ticket_data['is_checked_in']}"] = ticket
 
     # 6. Nhập dữ liệu cho Payment
     print("\nĐang nhập dữ liệu cho Payment...")
@@ -152,26 +174,103 @@ def load_dummy_data():
         except DiscountCode.DoesNotExist:
             print(f"DiscountCode {payment_data['discount_code']} không tồn tại, bỏ qua discount code...")
             discount_code = None
+
         if Payment.objects.filter(transaction_id=payment_data['transaction_id']).exists():
             print(f"Payment với transaction_id {payment_data['transaction_id']} đã tồn tại, bỏ qua...")
             continue
-        paid_at = make_aware(datetime.strptime(payment_data['paid_at'], '%Y-%m-%dT%H:%M:%S')) if payment_data.get('paid_at') else None
+
+        # Lấy danh sách vé từ ticket_keys
+        ticket_keys = payment_data.get('tickets', [])
+        tickets = []
+        for i in range(0, len(ticket_keys), 4):
+            event_title = ticket_keys[i]
+            user_name = ticket_keys[i + 1]
+            is_paid = ticket_keys[i + 2]
+            is_checked_in = ticket_keys[i + 3]
+            key = f"{event_title}_{user_name}_{is_paid}_{is_checked_in}"
+            if key in tickets_map:
+                tickets.append(tickets_map[key])
+            else:
+                print(f"Không tìm thấy ticket cho {key}, bỏ qua...")
+
+        if not tickets:
+            print(f"Không có vé hợp lệ cho payment của user {user.username}, bỏ qua payment...")
+            continue
+
+        # Tính toán lại amount để đảm bảo nhất quán
+        total_amount = sum(ticket.event.ticket_price for ticket in tickets)
+        amount_before_discount = total_amount  # Tính toán để kiểm tra, nhưng không lưu
+        discount_applied = 0  # Tính toán để kiểm tra, nhưng không lưu
+        final_amount = total_amount
+
+        if discount_code:
+            # Kiểm tra mã giảm giá hợp lệ
+            if (discount_code.is_active and
+                    discount_code.valid_from <= timezone.now() <= discount_code.valid_to and
+                    (discount_code.max_uses is None or discount_code.used_count < discount_code.max_uses)):
+                discount_applied = Decimal(str((total_amount * discount_code.discount_percentage) / 100))
+                final_amount = total_amount - discount_applied
+                discount_code.used_count += 1
+                discount_code.save(update_fields=['used_count'])
+            else:
+                print(f"Mã giảm giá {discount_code.code} không hợp lệ hoặc đã hết lượt sử dụng, bỏ qua áp dụng mã...")
+                discount_code = None
+                final_amount = total_amount
+
+        # Chuyển payment_data['amount'] thành Decimal để so sánh
+        payment_amount_from_data = Decimal(str(payment_data['amount']))
+
+        # So sánh amount tính toán với amount trong dữ liệu
+        if abs(final_amount - payment_amount_from_data) > Decimal('0.01'):
+            print(f"Cảnh báo: Amount trong dữ liệu ({payment_amount_from_data}) không khớp với tính toán ({final_amount}) cho user {user.username}, sử dụng amount tính toán...")
+            payment_amount = final_amount
+        else:
+            payment_amount = payment_amount_from_data
+
+        # Kiểm tra trạng thái payment và vé
+        payment_status = payment_data.get('status', False)
+        paid_at = timezone.make_aware(datetime.strptime(payment_data['paid_at'], '%Y-%m-%dT%H:%M:%S')) if payment_data.get('paid_at') else None
+
+        if payment_status:
+            # Nếu payment có status=True, đảm bảo tất cả vé liên quan cũng có is_paid=True
+            for ticket in tickets:
+                if not ticket.is_paid:
+                    print(f"Vé cho event {ticket.event.title} của user {user.username} chưa được thanh toán (is_paid=False), nhưng payment có status=True, điều chỉnh ticket...")
+                    ticket.is_paid = True
+                    ticket.save()
+                    # Cập nhật sold_tickets của event
+                    ticket.event.sold_tickets += 1
+                    ticket.event.save(update_fields=['sold_tickets'])
+        else:
+            # Nếu payment có status=False, đảm bảo tất cả vé liên quan có is_paid=False
+            for ticket in tickets:
+                if ticket.is_paid:
+                    print(f"Vé cho event {ticket.event.title} của user {user.username} đã được thanh toán (is_paid=True), nhưng payment có status=False, điều chỉnh ticket...")
+                    ticket.is_paid = False
+                    ticket.save()
+                    # Cập nhật sold_tickets của event
+                    ticket.event.sold_tickets -= 1
+                    ticket.event.save(update_fields=['sold_tickets'])
+
         with transaction.atomic():
             payment = Payment(
                 user=user,
-                amount=payment_data['amount'],
+                amount=payment_amount,
                 payment_method=payment_data['payment_method'],
-                status=payment_data.get('status', False),
+                status=payment_status,
                 transaction_id=payment_data['transaction_id'],
                 paid_at=paid_at,
                 discount_code=discount_code
             )
             payment.save()
-            # Gắn vé vào payment (many-to-many)
-            ticket_qr_codes = payment_data.get('tickets', [])
-            tickets = Ticket.objects.filter(qr_code__in=ticket_qr_codes)
             payment.tickets.set(tickets)
-            print(f"Đã tạo payment cho user {user.username}")
+
+            # Cập nhật total_spent của user nếu payment có status=True
+            if payment.status:
+                user.total_spent += payment.amount
+                user.save(update_fields=['total_spent'])
+
+            print(f"Đã tạo payment cho user {user.username} với transaction_id {payment.transaction_id}")
 
     # 7. Nhập dữ liệu cho Review
     print("\nĐang nhập dữ liệu cho Review...")
@@ -206,10 +305,19 @@ def load_dummy_data():
             event=event,
             title=notif_data['title'],
             message=notif_data['message'],
-            notification_type=notif_data.get('notification_type', 'general'),
-            is_read=notif_data.get('is_read', False)
+            notification_type=notif_data.get('notification_type', 'reminder')
         )
         notification.save()
+        # Tạo UserNotification cho tất cả người dùng có vé của sự kiện
+        if event:
+            ticket_owners = Ticket.objects.filter(event=event).values_list('user', flat=True).distinct()
+            for user_id in ticket_owners:
+                user = User.objects.get(id=user_id)
+                UserNotification.objects.create(
+                    user=user,
+                    notification=notification,
+                    is_read=False
+                )
         print(f"Đã tạo notification cho event {notif_data.get('event')}")
 
     # 9. Nhập dữ liệu cho ChatMessage
@@ -222,7 +330,6 @@ def load_dummy_data():
         except (Event.DoesNotExist, User.DoesNotExist) as e:
             print(f"Event {chat_data['event']}, Sender {chat_data['sender']} hoặc Receiver {chat_data['receiver']} không tồn tại, bỏ qua chat message...")
             continue
-        # Kiểm tra is_from_organizer trước khi tạo
         is_from_organizer = chat_data.get('is_from_organizer', False)
         if is_from_organizer and sender.role != 'organizer':
             print(f"Sender {sender.username} không phải organizer, không thể đặt is_from_organizer=True, bỏ qua...")
@@ -232,7 +339,7 @@ def load_dummy_data():
             sender=sender,
             receiver=receiver,
             message=chat_data['message'],
-            is_from_organizer=is_from_organizer,
+            is_from_organizer=is_from_organizer
         )
         chat_message.save()
         print(f"Đã tạo chat message trong event {event.title} bởi {sender.username}")
@@ -245,12 +352,20 @@ def load_dummy_data():
         except Event.DoesNotExist:
             print(f"Event {trending_data['event']} không tồn tại, bỏ qua event trending log...")
             continue
+        # Kiểm tra xem EventTrendingLog đã tồn tại cho event này chưa
+        if EventTrendingLog.objects.filter(event=event).exists():
+            print(f"EventTrendingLog cho event {event.title} đã tồn tại, bỏ qua...")
+            continue
+        # Tính total_revenue dựa trên sold_tickets và ticket_price
+        total_revenue = event.sold_tickets * event.ticket_price
         trending_log = EventTrendingLog(
             event=event,
             view_count=trending_data.get('view_count', 0),
-            ticket_sold_count=trending_data.get('ticket_sold_count', 0)
+            total_revenue=total_revenue  # Sửa lỗi cú pháp
         )
         trending_log.save()
+        # Tính trending_score và interest_score
+        trending_log.calculate_score()
         print(f"Đã tạo event trending log cho event {event.title}")
 
 

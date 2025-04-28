@@ -2,7 +2,7 @@ from rest_framework import serializers
 from rest_framework.serializers import ModelSerializer
 from .models import (
     User, Event, Tag, Ticket, Payment, Review, DiscountCode, Notification,
-    ChatMessage, EventTrendingLog
+    ChatMessage, EventTrendingLog, UserNotification
 )
 from django.db import transaction
 from django.utils import timezone
@@ -10,14 +10,14 @@ from django.db.models import F
 from django.db import models
 
 
-# Serializer cho Tag (không phụ thuộc serializer nào khác)
+# Serializer cho Tag
 class TagSerializer(ModelSerializer):
     class Meta:
         model = Tag
         fields = ['id', 'name']
 
 
-# Serializer cho Review (chỉ phụ thuộc model, không phụ thuộc serializer khác)
+# Serializer cho Review
 class ReviewSerializer(ModelSerializer):
     user_infor = serializers.SerializerMethodField()
 
@@ -39,18 +39,27 @@ class ReviewSerializer(ModelSerializer):
         }
 
 
-# Serializer cho Notification (chỉ phụ thuộc model)
-# Thông báo & nhắc nhở sự kiện
+# Serializer cho Notification
 class NotificationSerializer(ModelSerializer):
     event_title = serializers.ReadOnlyField(source='event.title')  # Lấy tiêu đề sự kiện nếu có
+    is_read = serializers.SerializerMethodField()  # Thêm field tùy chỉnh để lấy trạng thái đọc
 
     class Meta:
         model = Notification
-        fields = ['id', 'event', 'event_title', 'message', 'notification_type', 'is_read', 'created_at']
+        fields = ['id', 'event', 'event_title', 'title', 'message', 'notification_type', 'is_read', 'created_at']
         read_only_fields = ['id', 'event_title', 'created_at']
 
+    def get_is_read(self, obj):
+        # Lấy user hiện tại từ context
+        user = self.context.get('request').user if self.context.get('request') else None
+        if user and user.is_authenticated:
+            # Kiểm tra xem user có UserNotification tương ứng với notification này không
+            user_notification = UserNotification.objects.filter(user=user, notification=obj).first()
+            return user_notification.is_read if user_notification else False
+        return False
 
-# Serializer cho ChatMessage (chỉ phụ thuộc model)
+
+# Serializer cho ChatMessage
 class ChatMessageSerializer(ModelSerializer):
     user_info = serializers.SerializerMethodField()
 
@@ -66,7 +75,7 @@ class ChatMessageSerializer(ModelSerializer):
         }
 
 
-# Serializer cho DiscountCode (chỉ phụ thuộc model)
+# Serializer cho DiscountCode
 class DiscountCodeSerializer(ModelSerializer):
     class Meta:
         model = DiscountCode
@@ -77,7 +86,7 @@ class DiscountCodeSerializer(ModelSerializer):
         read_only_fields = ['used_count']
 
 
-# Serializer cho Event (không phụ thuộc serializer khác)
+# Serializer cho Event
 class EventSerializer(ModelSerializer):
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -90,8 +99,7 @@ class EventSerializer(ModelSerializer):
         read_only_fields = ['poster', 'title', 'location', 'start_time']
 
 
-# Serializer cho Ticket (chỉ phụ thuộc model, không phụ thuộc serializer khác)
-# Đặt vé trực tuyến / Xem thông tin vé
+# Serializer cho Ticket
 class TicketSerializer(ModelSerializer):
     username = serializers.ReadOnlyField(source='user.username')  # Lấy tên người dùng
     email = serializers.ReadOnlyField(source='user.email')  # Lấy email người dùng
@@ -123,7 +131,7 @@ class TicketSerializer(ModelSerializer):
         return Ticket.objects.create(user=user, event=event, **validated_data)
 
 
-# Serializer cho Payment (phụ thuộc TicketSerializer)
+# Serializer cho Payment
 class PaymentSerializer(ModelSerializer):
     user_detail = serializers.SerializerMethodField()
     tickets = TicketSerializer(many=True, read_only=True)  # Lấy danh sách vé đã mua
@@ -140,20 +148,8 @@ class PaymentSerializer(ModelSerializer):
             'phone': obj.user.phone,
         }
 
-    def get_tickets(self, obj):
-        tickets = obj.tickets.all()
-        return [
-            {
-                'id': ticket.id,
-                'event': ticket.event.title,
-                'qr_code': ticket.qr_code,
-                'purchase_date': ticket.purchase_date,
-            }
-            for ticket in tickets
-        ]
 
-
-# Serializer cho User (phụ thuộc TagSerializer)
+# Serializer cho User
 class UserSerializer(ModelSerializer):
     password = serializers.CharField(write_only=True, required=True)
     tags = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(), many=True, required=False)
@@ -197,13 +193,19 @@ class UserSerializer(ModelSerializer):
         return instance
 
 
-# Serializer cho UserDetail (phụ thuộc EventSerializer, TicketSerializer, PaymentSerializer, NotificationSerializer)
-# Serializer chi tiết cho User:Profile
+# Serializer chi tiết cho User: Profile
 class UserDetailSerializer(ModelSerializer):
     organized_events = EventSerializer(many=True, read_only=True)
     tickets = TicketSerializer(many=True, read_only=True)
     payments = PaymentSerializer(many=True, read_only=True)
-    notifications = NotificationSerializer(many=True, read_only=True)
+    user_notifications = serializers.SerializerMethodField()
+
+    def get_user_notifications(self, obj):
+        # Lấy danh sách UserNotification của user
+        user_notifications = obj.user_notifications.all()
+        # Trả về danh sách Notification tương ứng
+        notifications = [user_notification.notification for user_notification in user_notifications]
+        return NotificationSerializer(notifications, many=True, context=self.context).data
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -216,12 +218,12 @@ class UserDetailSerializer(ModelSerializer):
         fields = [
             'id', 'username', 'email', 'role', 'phone', 'avatar', 'total_spent',
             'tags', 'is_active', 'is_staff', 'is_superuser', 'created_at', 'updated_at',
-            'organized_events', 'tickets', 'payments', 'notifications'
+            'organized_events', 'tickets', 'payments', 'user_notifications'
         ]
         read_only_fields = ['created_at', 'updated_at', 'is_staff', 'is_superuser', 'total_spent']
 
 
-# Serializer cho EventDetail (phụ thuộc UserSerializer, ReviewSerializer, NotificationSerializer, ChatMessageSerializer, DiscountCodeSerializer)
+# Serializer cho EventDetail
 class EventDetailSerializer(serializers.ModelSerializer):
     organizer = UserSerializer(read_only=True)
     reviews = ReviewSerializer(many=True, read_only=True)
@@ -250,7 +252,11 @@ class EventDetailSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         tags = validated_data.pop('tags', [])
-        organizer = validated_data.pop('organizer', None)
+        # Lấy organizer từ context (user hiện tại)
+        user = self.context['request'].user
+        if not user.is_authenticated or user.role != 'organizer':
+            raise serializers.ValidationError("Chỉ có organizer mới có thể tạo sự kiện.")
+        validated_data['organizer'] = user
         with transaction.atomic():
             event = Event.objects.create(**validated_data)
             if tags:
@@ -279,20 +285,12 @@ class EventDetailSerializer(serializers.ModelSerializer):
                             'event_notifications', 'chat_messages', 'organizer']
 
 
-
+# Serializer cho EventTrendingLog
 class EventTrendingLogSerializer(serializers.ModelSerializer):
     event_title = serializers.ReadOnlyField(source='event.title')  # Lấy tiêu đề sự kiện
     event_poster = serializers.ReadOnlyField(source='event.poster.url')  # Lấy poster sự kiện
-
-    #   dư
-    # def to_representation(self, instance):
-    #     data = super().to_representation(instance)
-    #     data['poster'] = instance.event.poster.url if instance.event.poster else ''
-    #     return data
 
     class Meta:
         model = EventTrendingLog
         fields = ['id', 'event', 'event_title', 'event_poster', 'view_count', 'total_revenue', 'trending_score', 'interest_score', 'last_updated']
         read_only_fields = ['id', 'event_title', 'last_updated']
-
-

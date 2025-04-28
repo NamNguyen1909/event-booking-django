@@ -6,7 +6,6 @@
             "password": "password123",
             "role": "attendee",
             "phone": "1234567890",
-            "total_spent": 0,
             "is_active": true
         },
         {
@@ -15,7 +14,6 @@
             "password": "password123",
             "role": "attendee",
             "phone": "0987654321",
-            "total_spent": 112.50,
             "is_active": true
         },
         {
@@ -24,7 +22,6 @@
             "password": "password123",
             "role": "attendee",
             "phone": "5555555555",
-            "total_spent": 90.00,
             "is_active": true
         },
         {
@@ -33,7 +30,6 @@
             "password": "password123",
             "role": "organizer",
             "phone": "1112223333",
-            "total_spent": 0,
             "is_active": true
         },
         {
@@ -44,6 +40,20 @@
             "is_active": true,
             "is_staff": true,
             "is_superuser": true
+        }
+    ],
+    "tags": [
+        {
+            "name": "music"
+        },
+        {
+            "name": "tech"
+        },
+        {
+            "name": "conference"
+        },
+        {
+            "name": "sports"
         }
     ],
     "events": [
@@ -59,7 +69,6 @@
             "organizer": "alice_brown",
             "ticket_price": 75.00,
             "total_tickets": 5,
-            "sold_tickets": 2,
             "is_active": true,
             "tags": ["music"]
         },
@@ -75,7 +84,6 @@
             "organizer": "alice_brown",
             "ticket_price": 150.00,
             "total_tickets": 3,
-            "sold_tickets": 1,
             "is_active": true,
             "tags": ["tech", "conference"]
         },
@@ -91,7 +99,6 @@
             "organizer": "alice_brown",
             "ticket_price": 40.00,
             "total_tickets": 5,
-            "sold_tickets": 1,
             "is_active": true,
             "tags": ["sports"]
         }
@@ -122,50 +129,38 @@
         {
             "event": "Music Festival 2025",
             "user": "jane_smith",
-            "qr_code": "ticket_001",
             "is_paid": true,
-            "is_checked_in": false,
-            "purchase_date": "2025-04-10T10:00:00",
-            "check_in_date": null
+            "is_checked_in": false
         },
         {
             "event": "Music Festival 2025",
             "user": "bob_jones",
-            "qr_code": "ticket_002",
             "is_paid": true,
-            "is_checked_in": false,
-            "purchase_date": "2025-04-10T10:00:00",
-            "check_in_date": null
+            "is_checked_in": false
         },
         {
             "event": "Tech Conference 2025",
             "user": "john_doe",
-            "qr_code": "ticket_003",
             "is_paid": true,
-            "is_checked_in": false,
-            "purchase_date": "2025-04-10T10:00:00",
-            "check_in_date": null
+            "is_checked_in": false
         },
         {
             "event": "Marathon 2025",
             "user": "jane_smith",
-            "qr_code": "ticket_004",
             "is_paid": true,
-            "is_checked_in": false,
-            "purchase_date": "2025-04-10T10:00:00",
-            "check_in_date": null
+            "is_checked_in": false
         }
     ],
     "payments": [
         {
             "user": "jane_smith",
-            "amount": 150.00,
+            "amount": 115.00,
             "payment_method": "momo",
             "status": true,
             "transaction_id": "trans_001",
             "paid_at": "2025-04-10T10:00:00",
             "discount_code": "WELCOME10",
-            "tickets": ["ticket_001", "ticket_004"]
+            "tickets": ["Music Festival 2025", "jane_smith", true, false, "Marathon 2025", "jane_smith", true, false]
         },
         {
             "user": "bob_jones",
@@ -175,7 +170,7 @@
             "transaction_id": "trans_002",
             "paid_at": "2025-04-10T10:00:00",
             "discount_code": null,
-            "tickets": ["ticket_002"]
+            "tickets": ["Music Festival 2025", "bob_jones", true, false]
         },
         {
             "user": "john_doe",
@@ -185,7 +180,7 @@
             "transaction_id": "trans_003",
             "paid_at": "2025-04-10T10:00:00",
             "discount_code": null,
-            "tickets": ["ticket_003"]
+            "tickets": ["Tech Conference 2025", "john_doe", true, false]
         }
     ],
     "reviews": [
@@ -250,18 +245,15 @@
     "event_trending_logs": [
         {
             "event": "Music Festival 2025",
-            "view_count": 120,
-            "ticket_sold_count": 3
+            "view_count": 120
         },
         {
             "event": "Tech Conference 2025",
-            "view_count": 80,
-            "ticket_sold_count": 1
+            "view_count": 80
         },
         {
             "event": "Marathon 2025",
-            "view_count": 50,
-            "ticket_sold_count": 1
+            "view_count": 50
         }
     ]
 }
