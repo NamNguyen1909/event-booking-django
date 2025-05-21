@@ -13,26 +13,32 @@ from django.utils import timezone
 @receiver(post_save, sender=Event)
 def create_notification_for_event_update(sender, instance, created, update_fields=None, **kwargs):
     """Tạo thông báo khi sự kiện được cập nhật."""
-    # Bỏ qua nếu chỉ cập nhật trường sold_tickets
-    if not created and update_fields == {'sold_tickets'}:
+    # Bỏ qua nếu là sự kiện mới hoặc chỉ cập nhật trường sold_tickets
+    if created or update_fields == {'sold_tickets'}:
         return
-    if not created:  # Chỉ chạy khi sự kiện được cập nhật
-        with transaction.atomic():
-            # Tạo một thông báo duy nhất cho sự kiện
-            notification = Notification.objects.create(
-                event=instance,
-                title=f"Cập nhật sự kiện: {instance.title}",
-                message=f"Sự kiện '{instance.title}' đã được cập nhật.",
-                notification_type='update'
-            )
-            # Lấy danh sách user có vé cho sự kiện
-            ticket_owners = Ticket.objects.filter(event=instance).select_related('user').values_list('user', flat=True).distinct()
-            # Tạo UserNotification cho từng user
-            user_notifications = [
-                UserNotification(user_id=user_id, notification=notification)
-                for user_id in ticket_owners
-            ]
-            UserNotification.objects.bulk_create(user_notifications)
+
+    # Chỉ tạo thông báo nếu các trường quan trọng được cập nhật
+    important_fields = {'title', 'start_time', 'end_time', 'location', 'is_active'}
+    if update_fields and not important_fields.intersection(update_fields):
+        return
+
+    with transaction.atomic():
+        # Tạo một thông báo duy nhất cho sự kiện
+        notification = Notification.objects.create(
+            event=instance,
+            title=f"Cập nhật sự kiện: {instance.title}",
+            message=f"Sự kiện '{instance.title}' đã được cập nhật.",
+            notification_type='update'
+        )
+        # Lấy danh sách user có vé cho sự kiện
+        ticket_owners = Ticket.objects.filter(event=instance).select_related('user').values_list('user', flat=True).distinct()
+        # Tạo UserNotification cho từng user
+        user_notifications = [
+            UserNotification(user_id=user_id, notification=notification)
+            for user_id in ticket_owners
+        ]
+        # Sử dụng ignore_conflicts để bỏ qua các bản ghi trùng lặp
+        UserNotification.objects.bulk_create(user_notifications, ignore_conflicts=True)
 
 
 # Tự động tạo UserNotification khi Notification được tạo thủ công
@@ -52,7 +58,7 @@ def create_usernotification_for_manual_notification(sender, instance, created, *
                 UserNotification(user_id=user_id, notification=instance)
                 for user_id in ticket_owners
             ]
-            UserNotification.objects.bulk_create(user_notifications)
+            UserNotification.objects.bulk_create(user_notifications, ignore_conflicts=True)
 
 
 # Tạo tag và superuser mặc định sau khi migrate

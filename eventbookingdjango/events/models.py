@@ -6,6 +6,7 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, Permis
 from django.core.exceptions import ValidationError
 from cloudinary.models import CloudinaryField
 import uuid
+from decimal import Decimal
 
 # pip install qrcode[pil]
 import qrcode
@@ -131,7 +132,7 @@ class Event(models.Model):
     longitude = models.FloatField(validators=[MinValueValidator(-180), MaxValueValidator(180)])
 
     total_tickets = models.IntegerField(validators=[MinValueValidator(0)])
-    ticket_price = models.DecimalField(max_digits=9, decimal_places=2, validators=[MinValueValidator(0)])
+    ticket_price = models.DecimalField(max_digits=9, decimal_places=2, validators=[MinValueValidator(Decimal('0.00'))])
     sold_tickets = models.IntegerField(default=0, validators=[MinValueValidator(0)])
 
     tags = models.ManyToManyField('Tag', blank=True, related_name='events')
@@ -195,12 +196,15 @@ class Ticket(models.Model):
 
     is_checked_in = models.BooleanField(default=False)
     check_in_date = models.DateTimeField(null=True, blank=True)
+    payment=models.ForeignKey('Payment', on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name='tickets')
 
     class Meta:
         indexes = [
             models.Index(fields=['user', 'event']),
             models.Index(fields=['qr_code']),
         ]
+        ordering = ['-created_at']
 
     def __str__(self):
         return f"Vé của {self.user} - Sự kiện {self.event.title}"
@@ -233,7 +237,6 @@ class Payment(models.Model):
     )
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='payments')
-    tickets = models.ManyToManyField(Ticket, related_name='payments', blank=True)  # Danh sách vé liên quan
     amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)])
     payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)
     status = models.BooleanField(default=False)
@@ -251,35 +254,27 @@ class Payment(models.Model):
     def save(self, *args, **kwargs):
         with transaction.atomic():
             if not self.pk:
-                # Nếu là tạo mới (chưa có id), thì tự động lấy các vé chưa thanh toán của sự kiện liên quan
-                unpaid_tickets = Ticket.objects.filter(user=self.user, is_paid=False, event__in=Event.objects.filter(tickets__user=self.user)).select_related('event').distinct()
-                total = sum(ticket.event.ticket_price for ticket in unpaid_tickets)
+                # Respect the status set externally, default to False if not set
+                if self.status is None:
+                    self.status = False
 
-                # Áp dụng giảm giá nếu có
-                if self.discount_code and self.discount_code.is_valid():
-                    discount = total * (self.discount_code.discount_percentage / 100)
-                    total -= discount
-                self.amount = max(total, 0)
-
-                self.status = True  # Giả định là thanh toán thành công (bạn có thể tùy chỉnh)
                 if self.status and not self.paid_at:
                     self.paid_at = timezone.now()
 
-                super().save(*args, **kwargs)  # Phải save trước khi gọi set() cho ManyToMany
-                self.tickets.set(unpaid_tickets)  # Gắn vé vào payment
+                super().save(*args, **kwargs)  # Save before assigning tickets
 
             else:
-                # Cập nhật thanh toán (nếu có cập nhật sau này)
+                # Update payment if modified
                 if self.status and not self.paid_at:
                     self.paid_at = timezone.now()
                 super().save(*args, **kwargs)
 
-            # Đánh dấu vé là đã thanh toán
-            for ticket in self.tickets.all():
+            # Mark tickets as paid
+            for ticket in Ticket.objects.filter(payment=self):
                 if not ticket.is_paid:
                     ticket.mark_as_paid(self.paid_at)
 
-            # Cập nhật số lần dùng của mã giảm giá
+            # Update discount code usage count
             if self.discount_code and self.discount_code.is_valid():
                 self.discount_code.used_count += 1
                 self.discount_code.save()
@@ -292,17 +287,26 @@ class Payment(models.Model):
 class Review(models.Model):
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='reviews')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='event_reviews')
-    rating = models.PositiveIntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
+    rating = models.PositiveIntegerField(
+        validators=[MinValueValidator(0), MaxValueValidator(5)],
+        default=0  # Đảm bảo default=0 để phù hợp với phản hồi
+    )
     comment = models.TextField(null=True, blank=True)
+    
+    # Thêm dòng này để cho phép phản hồi review khác
+    parent_review = models.ForeignKey('self', null=True, blank=True, on_delete=models.CASCADE, related_name='replies')
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         indexes = [
             models.Index(fields=['event', 'user']),
+            models.Index(fields=['parent_review']),
         ]
 
     def __str__(self):
-        return f"Đánh giá {self.rating} - {self.event.title}"
+        return f"{self.user} - {self.rating} sao cho {self.event}"
+
 
 
 # Mã giảm giá
@@ -357,6 +361,9 @@ class Notification(models.Model):
 
     def __str__(self):
         return self.title
+    
+    class Meta:
+        ordering = ['-created_at']
 
 # Chưa có cơ chế gửi thông báo real-time (cần tích hợp WebSocket hoặc Django Channels).
 # Để đánh dấu thông báo  đã được người dùng đọc hay chưa
@@ -380,6 +387,7 @@ class ChatMessage(models.Model):
     message = models.TextField()
     is_from_organizer = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+    is_read = models.BooleanField(default=False)
 
     class Meta:
         indexes = [
@@ -398,7 +406,8 @@ import math
 from datetime import date
 
 class EventTrendingLog(models.Model):
-    event = models.OneToOneField(Event, on_delete=models.CASCADE, related_name='trending_log')
+    # EventTrendingLog dùng chung khóa chính với Event (tức là cùng một ID, kiểu như extension của bảng Event)
+    event = models.OneToOneField(Event, on_delete=models.CASCADE, related_name='trending_log', primary_key=True)
     view_count = models.IntegerField(default=0)
     total_revenue = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     trending_score = models.DecimalField(max_digits=10, decimal_places=4, default=0)

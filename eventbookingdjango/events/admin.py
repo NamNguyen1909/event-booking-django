@@ -174,10 +174,15 @@ class ChatMessageAdmin(admin.ModelAdmin):
 
 # Admin cho EventTrendingLog
 class EventTrendingLogAdmin(admin.ModelAdmin):
-    list_display = ['id', 'event', 'view_count', 'get_ticket_sold_count', 'total_revenue', 'trending_score', 'interest_score', 'last_updated']
+    list_display = ['get_event_id', 'event', 'view_count', 'get_ticket_sold_count', 'total_revenue', 'trending_score', 'interest_score', 'last_updated']
     search_fields = ['event__title']
     list_filter = ['last_updated']
     list_per_page = 20
+
+    def get_event_id(self, obj):
+        return obj.event.id
+
+    get_event_id.short_description = 'Event ID'
 
     def get_ticket_sold_count(self, obj):
         return obj.event.sold_tickets

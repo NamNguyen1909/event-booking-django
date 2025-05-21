@@ -8,6 +8,8 @@ from django.db import transaction
 from django.utils import timezone
 from django.db.models import F
 from django.db import models
+from decimal import Decimal
+from cloudinary.utils import cloudinary_url
 
 
 # Serializer cho Tag
@@ -18,18 +20,35 @@ class TagSerializer(ModelSerializer):
 
 
 # Serializer cho Review
-class ReviewSerializer(ModelSerializer):
+class ReviewSerializer(serializers.ModelSerializer):
     user_infor = serializers.SerializerMethodField()
 
     class Meta:
         model = Review
-        fields = ['id', 'user', 'user_infor', 'event', 'rating', 'comment', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = ['id', 'user', 'user_infor', 'event', 'rating', 'comment', 'parent_review', 'created_at']
+        read_only_fields = ['id', 'created_at', 'user']
 
     def validate_rating(self, value):
-        if not (1 <= value <= 5):
-            raise serializers.ValidationError("Điểm đánh giá phải từ 1 đến 5.")
+        # Chỉ kiểm tra nếu rating được cung cấp và không phải là phản hồi
+        if value is not None and not self.initial_data.get('parent_review'):
+            if not (1 <= value <= 5):
+                raise serializers.ValidationError("Điểm đánh giá phải từ 1 đến 5.")
         return value
+
+    def validate(self, data):
+        # Nếu là phản hồi (parent_review được cung cấp), không yêu cầu rating
+        if data.get('parent_review'):
+            user = self.context['request'].user
+            event = data['parent_review'].event
+            if user.role != 'organizer' or event.organizer != user:
+                raise serializers.ValidationError("Chỉ organizer của sự kiện mới có thể phản hồi đánh giá.")
+            # Gán rating mặc định là 0 nếu không cung cấp
+            data['rating'] = data.get('rating', 0)
+        else:
+            # Nếu là review gốc, yêu cầu rating
+            if 'rating' not in data or data['rating'] is None:
+                raise serializers.ValidationError({"rating": "Điểm đánh giá là bắt buộc cho review gốc."})
+        return data
 
     def get_user_infor(self, obj):
         """Trả về thông tin chi tiết của người dùng."""
@@ -40,9 +59,9 @@ class ReviewSerializer(ModelSerializer):
 
 
 # Serializer cho Notification
-class NotificationSerializer(ModelSerializer):
-    event_title = serializers.ReadOnlyField(source='event.title')  # Lấy tiêu đề sự kiện nếu có
-    is_read = serializers.SerializerMethodField()  # Thêm field tùy chỉnh để lấy trạng thái đọc
+class NotificationSerializer(serializers.ModelSerializer):
+    event_title = serializers.ReadOnlyField(source='event.title', allow_null=True)
+    is_read = serializers.SerializerMethodField()
 
     class Meta:
         model = Notification
@@ -50,13 +69,15 @@ class NotificationSerializer(ModelSerializer):
         read_only_fields = ['id', 'event_title', 'created_at']
 
     def get_is_read(self, obj):
-        # Lấy user hiện tại từ context
-        user = self.context.get('request').user if self.context.get('request') else None
-        if user and user.is_authenticated:
-            # Kiểm tra xem user có UserNotification tương ứng với notification này không
-            user_notification = UserNotification.objects.filter(user=user, notification=obj).first()
-            return user_notification.is_read if user_notification else False
-        return False
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        # Sử dụng filter().first() để tránh truy vấn không cần thiết
+        user_notification = UserNotification.objects.filter(
+            user=request.user,
+            notification=obj
+        ).first()
+        return user_notification.is_read if user_notification else False
 
 
 # Serializer cho ChatMessage
@@ -87,7 +108,7 @@ class DiscountCodeSerializer(ModelSerializer):
 
 
 # Serializer cho Event
-class EventSerializer(ModelSerializer):
+class EventSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data['poster'] = instance.poster.url if instance.poster else ''
@@ -95,8 +116,41 @@ class EventSerializer(ModelSerializer):
 
     class Meta:
         model = Event
-        fields = ['poster', 'title', 'location', 'start_time']
-        read_only_fields = ['poster', 'title', 'location', 'start_time']
+        fields = [
+            'id', 'organizer', 'title', 'description', 'category', 'start_time', 'end_time',
+            'is_active', 'location', 'latitude', 'longitude', 'total_tickets', 'ticket_price',
+            'sold_tickets', 'tags', 'poster', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'organizer', 'sold_tickets', 'created_at', 'updated_at']
+
+        # Đảm bảo các trường không bắt buộc khi cập nhật (partial update)
+        extra_kwargs = {
+            'title': {'required': False},
+            'description': {'required': False},
+            'category': {'required': False},
+            'start_time': {'required': False},
+            'end_time': {'required': False},
+            'is_active': {'required': False},
+            'location': {'required': False},
+            'latitude': {'required': False},
+            'longitude': {'required': False},
+            'total_tickets': {'required': False},
+            'ticket_price': {'required': False},
+            'poster': {'required': False},
+            'tags': {'required': False},
+        }
+
+    # Xử lý ticket_price dưới dạng DecimalField để đảm bảo validate đúng
+    ticket_price = serializers.DecimalField(
+        max_digits=9,
+        decimal_places=2,
+        min_value=Decimal('0'),
+        required=False
+    )
+    from decimal import Decimal
+    total_tickets = serializers.IntegerField(min_value=Decimal('0'), required=False)
+    latitude = serializers.FloatField(min_value=Decimal('-90'), max_value=Decimal('90'), required=False)
+    longitude = serializers.FloatField(min_value=Decimal('-180'), max_value=Decimal('180'), required=False)
 
 
 # Serializer cho Ticket
@@ -106,22 +160,28 @@ class TicketSerializer(ModelSerializer):
     event_title = serializers.ReadOnlyField(source='event.title')  # Lấy tiêu đề sự kiện
     event_start_time = serializers.ReadOnlyField(source='event.start_time')  # Lấy thời gian bắt đầu sự kiện
     event_location = serializers.ReadOnlyField(source='event.location')  # Lấy địa điểm sự kiện
+    event_id = serializers.ReadOnlyField(source='event.id')  # Lấy event id
     qr_code = serializers.ReadOnlyField()  # Thêm trường qr_code để hiển thị mã QR
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        data['qr_code'] = instance.qr_code.url if instance.qr_code else ''
+        if instance.qr_code:
+            public_id = str(instance.qr_code)  # hoặc instance.qr_code.public_id nếu cần chính xác hơn
+            url, options = cloudinary_url(public_id)
+            data['qr_code'] = url
+        else:
+            data['qr_code'] = ''
         return data
 
     class Meta:
         model = Ticket
         fields = [
             'id', 'username', 'email', 'purchase_date', 'qr_code',
-            'event_title', 'event_start_time', 'event_location'
+            'event_title', 'event_start_time', 'event_location', 'event_id','is_paid','uuid'
         ]
         read_only_fields = [
             'id', 'username', 'email', 'purchase_date', 'qr_code',
-            'event_title', 'event_start_time', 'event_location'
+            'event_title', 'event_start_time', 'event_location', 'event_id','is_paid','uuid'
         ]
 
     def create(self, validated_data):
@@ -136,6 +196,8 @@ class PaymentSerializer(ModelSerializer):
     user_detail = serializers.SerializerMethodField()
     tickets = TicketSerializer(many=True, read_only=True)  # Lấy danh sách vé đã mua
 
+    amount = serializers.SerializerMethodField()
+
     class Meta:
         model = Payment
         fields = ['id', 'user', 'user_detail', 'amount', 'payment_method', 'paid_at', 'transaction_id', 'tickets']
@@ -148,16 +210,21 @@ class PaymentSerializer(ModelSerializer):
             'phone': obj.user.phone,
         }
 
+    def get_amount(self, obj):
+        # Convert Decimal to string for JSON serialization
+        return str(obj.amount)
+
 
 # Serializer cho User
 class UserSerializer(ModelSerializer):
     password = serializers.CharField(write_only=True, required=True)
     tags = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(), many=True, required=False)
+    avatar = serializers.ImageField(required=False, allow_null=True)
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'password', 'phone', 'role', 'tags']
-        read_only_fields = ['id']
+        fields = ['id', 'username', 'email', 'password', 'phone', 'role', 'tags', 'avatar','is_staff']
+        read_only_fields = ['id','is_staff']
 
     def validate_tags(self, value):
         if value:
@@ -169,12 +236,14 @@ class UserSerializer(ModelSerializer):
     def create(self, validated_data):
         password = validated_data.pop('password')
         tags = validated_data.pop('tags', [])
+        avatar = validated_data.pop('avatar', None)
         user = User.objects.create_user(
             username=validated_data['username'],
             email=validated_data['email'],
             password=password,
             phone=validated_data.get('phone'),
-            role=validated_data.get('role', 'attendee')
+            role=validated_data.get('role', 'attendee'),
+            avatar=avatar
         )
         if tags:
             user.tags.set(tags)
@@ -183,12 +252,15 @@ class UserSerializer(ModelSerializer):
     def update(self, instance, validated_data):
         password = validated_data.pop('password', None)
         tags = validated_data.pop('tags', None)
+        avatar = validated_data.pop('avatar', None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         if password:
             instance.set_password(password)
         if tags is not None:
             instance.tags.set(tags)
+        if avatar is not None:
+            instance.avatar = avatar
         instance.save()
         return instance
 
@@ -229,7 +301,7 @@ class EventDetailSerializer(serializers.ModelSerializer):
     reviews = ReviewSerializer(many=True, read_only=True)
     event_notifications = NotificationSerializer(many=True, read_only=True)
     chat_messages = ChatMessageSerializer(many=True, read_only=True)
-    tags = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(), many=True, required=False)
+    tags = TagSerializer(many=True, read_only=True)
     discount_codes = serializers.SerializerMethodField()
 
     def get_discount_codes(self, obj):
@@ -248,6 +320,7 @@ class EventDetailSerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
         data['poster'] = instance.poster.url if instance.poster else ''
         data['sold_tickets'] = instance.sold_tickets
+        data['ticket_price'] = str(instance.ticket_price) if instance.ticket_price is not None else None
         return data
 
     def create(self, validated_data):
@@ -292,5 +365,5 @@ class EventTrendingLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = EventTrendingLog
-        fields = ['id', 'event', 'event_title', 'event_poster', 'view_count', 'total_revenue', 'trending_score', 'interest_score', 'last_updated']
-        read_only_fields = ['id', 'event_title', 'last_updated']
+        fields = [ 'event', 'event_title', 'event_poster', 'view_count', 'total_revenue', 'trending_score', 'interest_score', 'last_updated']
+        read_only_fields = ['event_title', 'last_updated']
